@@ -1,0 +1,1353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Python Works Internally — Part III: Functions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0d13;
+    --bg-raise: #10141c;
+    --panel: #131926;
+    --panel-2: #161d2c;
+    --grid-line: #1c2433;
+    --border: #232c3d;
+    --border-soft: #1a2130;
+    --text: #dfe4ec;
+    --text-dim: #9aa5b6;
+    --text-faint: #5f6a7d;
+    --amber: #f0a83c;
+    --amber-dim: #b9822f;
+    --blue: #6fb3e0;
+    --blue-dim: #3f6a8a;
+    --rust: #e4744f;
+    --green: #7fc79e;
+    --violet: #b394d6;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --maxw: 860px;
+  }
+
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+
+  body{
+    margin: 0;
+    background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 100% 42px,
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 42px 100%,
+      var(--bg);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection{ background: var(--amber); color: #16110a; }
+
+  a{ color: var(--blue); text-decoration: none; }
+  a:hover{ text-decoration: underline; }
+
+  code, pre, .mono{ font-family: var(--mono); }
+
+  /* ---------- Layout shell ---------- */
+  .shell{
+    display: grid;
+    grid-template-columns: 300px minmax(0,1fr);
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: rgba(10,13,19,0.9);
+    backdrop-filter: blur(6px);
+    padding: 28px 20px 60px;
+  }
+  .sidebar::-webkit-scrollbar{ width: 8px; }
+  .sidebar::-webkit-scrollbar-thumb{ background: var(--border); border-radius: 4px; }
+
+  .brand{
+    display:flex; align-items:center; gap: 10px;
+    margin-bottom: 6px;
+  }
+  .brand-mark{
+    width: 30px; height: 30px; flex: none;
+    border: 1px solid var(--amber-dim);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    color: var(--amber);
+    font-family: var(--mono); font-weight: 700; font-size: 13px;
+    background: linear-gradient(160deg, rgba(240,168,60,0.14), transparent);
+  }
+  .brand-text{ font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); letter-spacing: 0.02em; line-height: 1.35;}
+  .brand-text b{ color: var(--text); display:block; font-size: 13px; }
+
+  .part-label{
+    margin: 22px 0 18px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--amber);
+    background: var(--panel);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .part-label b{ display:block; color: var(--text); font-size: 13px; margin-bottom: 3px; letter-spacing: 0; }
+
+  nav.toc{ font-size: 13.5px; }
+  nav.toc .ch{ margin-bottom: 4px; }
+  nav.toc .ch-link{
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 7px 8px;
+    border-radius: 5px;
+    color: var(--text);
+    font-weight: 600;
+  }
+  nav.toc .ch-link:hover{ background: var(--panel); text-decoration:none; }
+  nav.toc .ch-link.active{ background: var(--panel-2); color: var(--amber); }
+  nav.toc .ch-num{ font-family: var(--mono); color: var(--text-faint); font-size: 12px; flex: none; }
+  nav.toc .ch-link.active .ch-num{ color: var(--amber-dim); }
+
+  nav.toc .sub{ list-style: none; margin: 2px 0 10px 30px; padding: 0; border-left: 1px solid var(--border-soft); }
+  nav.toc .sub li a{
+    display: block;
+    padding: 4px 0 4px 12px;
+    color: var(--text-dim);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  nav.toc .sub li a:hover{ color: var(--text); text-decoration: none; }
+  nav.toc .sub li a.active{ color: var(--amber); }
+
+  .sidebar-foot{
+    margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+    font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); line-height:1.6;
+  }
+
+  /* ---------- Main content ---------- */
+  main{ min-width: 0; padding: 64px 48px 140px; }
+  .content{ max-width: var(--maxw); margin: 0 auto; }
+
+  .doc-header{ margin-bottom: 64px; }
+  .doc-header .eyebrow{
+    font-family: var(--mono); color: var(--amber); font-size: 12.5px;
+    letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 14px;
+  }
+  .doc-header h1{
+    font-family: var(--mono); font-size: clamp(28px, 4vw, 42px);
+    line-height: 1.2; margin: 0 0 18px; color: #fff; letter-spacing: -0.01em;
+  }
+  .doc-header .lede{ color: var(--text-dim); font-size: 17px; max-width: 640px; }
+  .doc-header .goal-box{
+    margin-top: 28px; padding: 16px 18px;
+    border: 1px dashed var(--border);
+    background: var(--panel);
+    font-size: 14px; color: var(--text-dim);
+  }
+  .doc-header .goal-box b{ color: var(--amber); font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; display:block; margin-bottom: 6px;}
+
+  section.chapter{ padding-top: 30px; margin-top: 10px; scroll-margin-top: 24px; }
+  section.chapter + section.chapter{ border-top: 1px solid var(--border-soft); margin-top: 80px; padding-top: 70px; }
+
+  .chapter-kicker{
+    display:flex; align-items:center; gap: 14px; margin-bottom: 10px;
+  }
+  .chapter-kicker .num{
+    font-family: var(--mono); font-size: 13px; color: var(--bg);
+    background: var(--amber); border-radius: 4px; padding: 3px 8px; font-weight: 700;
+  }
+  .chapter-kicker .tag{ font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  h2.chapter-title{
+    font-family: var(--mono); font-size: clamp(24px,3vw,32px);
+    color: #fff; margin: 0 0 26px; letter-spacing: -0.01em; scroll-margin-top: 24px;
+  }
+
+  h3{
+    font-family: var(--mono); font-size: 19px; color: var(--amber);
+    margin: 46px 0 14px; letter-spacing: -0.01em; scroll-margin-top: 24px;
+    display:flex; align-items:baseline; gap:10px;
+  }
+  h3::before{ content: '§'; color: var(--text-faint); font-size: 15px; }
+
+  h4{ font-family: var(--mono); font-size: 15px; color: var(--blue); margin: 26px 0 10px; }
+
+  p{ margin: 0 0 16px; color: var(--text); }
+  p.dim, li.dim{ color: var(--text-dim); }
+  strong{ color: #fff; font-weight: 600; }
+  em.term{ color: var(--amber); font-style: normal; font-weight: 600; }
+
+  ul, ol{ margin: 0 0 18px; padding-left: 22px; color: var(--text); }
+  li{ margin-bottom: 8px; }
+  li::marker{ color: var(--amber-dim); }
+
+  /* inline code */
+  :not(pre) > code{
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--blue);
+    padding: 1.5px 6px;
+    border-radius: 4px;
+    font-size: 0.87em;
+  }
+
+  /* code blocks */
+  .code-block{
+    margin: 20px 0 26px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1119;
+  }
+  .code-head{
+    display:flex; align-items:center; justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .code-head .dots{ display:flex; gap:5px; }
+  .code-head .dots span{ width:8px; height:8px; border-radius:50%; background: var(--border); display:inline-block; }
+  pre{
+    margin: 0; padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.3px;
+    line-height: 1.65;
+    color: #d7dde6;
+  }
+  pre .c{ color: var(--text-faint); font-style: italic; } /* comment */
+  pre .k{ color: var(--violet); } /* keyword */
+  pre .s{ color: var(--green); } /* string */
+  pre .n{ color: var(--amber); } /* number/name emphasis */
+  pre .f{ color: var(--blue); } /* function/builtin */
+  pre .o{ color: var(--rust); } /* operator/opcode */
+  pre .nd{ color: var(--amber); } /* decorator @syntax */
+
+  /* callouts */
+  .note{
+    margin: 22px 0; padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--blue);
+    background: var(--panel);
+    font-size: 14.5px; color: var(--text-dim);
+  }
+  .note b.label{ color: var(--blue); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display:block; margin-bottom: 6px; }
+
+  .warn{ border-left-color: var(--rust); }
+  .warn b.label{ color: var(--rust); }
+
+  .insight{ border-left-color: var(--amber); }
+  .insight b.label{ color: var(--amber); }
+
+  .exercise{
+    margin: 26px 0; padding: 16px 18px;
+    border: 1px solid var(--amber-dim);
+    background: linear-gradient(160deg, rgba(240,168,60,0.06), transparent);
+    font-size: 14.5px;
+  }
+  .exercise b.label{ color: var(--amber); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display:block; margin-bottom: 8px; }
+  .exercise ol, .exercise ul{ margin-bottom: 0; }
+
+  /* tables */
+  table{ width: 100%; border-collapse: collapse; margin: 20px 0 28px; font-size: 14px; }
+  th, td{ text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  th{ font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); border-bottom: 1px solid var(--border); }
+  td code{ white-space: nowrap; }
+  tr:hover td{ background: rgba(255,255,255,0.015); }
+
+  /* pipeline diagram (signature element for ch.2 but reused) */
+  .pipeline{
+    display:flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+    margin: 30px 0 34px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    overflow-x: auto;
+  }
+  .pipeline .stage{
+    flex: 1 1 0; min-width: 118px;
+    padding: 16px 14px;
+    border-right: 1px solid var(--border-soft);
+    position: relative;
+  }
+  .pipeline .stage:last-child{ border-right: none; }
+  .pipeline .stage .k{ font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .pipeline .stage .v{ font-family: var(--mono); font-size: 14px; color: var(--amber); margin-top: 6px; font-weight: 600; }
+  .pipeline .stage .d{ font-size: 11.5px; color: var(--text-dim); margin-top: 5px; line-height: 1.4; }
+  .pipeline .stage::after{
+    content: '→';
+    position: absolute; right: -11px; top: 50%; transform: translateY(-50%);
+    color: var(--text-faint); font-size: 14px; z-index: 2;
+  }
+  .pipeline .stage:last-child::after{ content: ''; }
+
+  /* frame/stack diagram box, used heavily in ch4/ch5 */
+  .frame-diagram{
+    display: grid; gap: 10px;
+    margin: 24px 0 30px;
+    grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+  }
+  .frame-box{
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 12px 14px;
+    border-radius: 6px;
+  }
+  .frame-box .fb-title{ font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .frame-box .fb-row{ display:flex; justify-content: space-between; font-family: var(--mono); font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .frame-box .fb-row:last-child{ border-bottom: none; }
+  .frame-box .fb-row .name{ color: var(--blue); }
+  .frame-box .fb-row .val{ color: var(--text-dim); }
+
+  /* key/value definition list */
+  .deflist{ margin: 20px 0 28px; }
+  .deflist .item{ display: grid; grid-template-columns: 160px 1fr; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+  .deflist .item dt{ font-family: var(--mono); color: var(--amber); font-size: 13.5px; font-weight: 600; }
+  .deflist .item dd{ margin: 0; color: var(--text-dim); font-size: 14.5px; }
+
+  .qa{ margin: 20px 0 28px; }
+  .qa .q{ font-family: var(--mono); color: #fff; font-size: 14.5px; font-weight: 600; margin-bottom: 6px; }
+  .qa .q::before{ content: 'Q. '; color: var(--amber); }
+  .qa .a{ color: var(--text-dim); font-size: 14.5px; margin-bottom: 22px; padding-left: 20px; border-left: 2px solid var(--border); }
+
+  .chapter-summary{
+    margin-top: 50px; padding: 20px 22px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .chapter-summary .cs-title{ font-family: var(--mono); color: var(--amber); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .chapter-summary ul{ margin-bottom: 0; }
+  .chapter-summary li{ font-size: 14px; color: var(--text-dim); }
+
+  /* type-spec cards, used heavily in Ch.9 */
+  .type-card{
+    margin: 34px 0; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); overflow: hidden;
+  }
+  .type-card .tc-head{
+    display:flex; align-items:center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    padding: 14px 18px; background: var(--panel-2); border-bottom: 1px solid var(--border);
+  }
+  .type-card .tc-head .tc-name{ font-family: var(--mono); font-size: 18px; color: #fff; font-weight: 700; }
+  .type-card .tc-head .tc-name code{ background:none; border:none; padding:0; color:#fff; font-size: 1em; }
+  .type-card .tc-badge{
+    font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 3px 9px; border-radius: 20px; border: 1px solid var(--border);
+  }
+  .type-card .tc-badge.immutable{ color: var(--blue); border-color: var(--blue-dim); }
+  .type-card .tc-badge.mutable{ color: var(--rust); border-color: var(--rust); }
+  .type-card .tc-body{ padding: 18px 20px 6px; }
+  .type-card h5{
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.08em; margin: 20px 0 8px;
+  }
+  .type-card h5:first-child{ margin-top: 0; }
+  .type-card p{ font-size: 14.5px; margin-bottom: 12px; }
+  .type-card table{ margin: 6px 0 16px; font-size: 13px; }
+  .type-card table th, .type-card table td{ padding: 6px 10px; }
+  .type-card ul{ margin-bottom: 12px; padding-left: 20px; }
+  .type-card li{ font-size: 14px; margin-bottom: 6px; }
+  .type-card .tc-gotcha{
+    margin: 14px 0 18px; padding: 10px 14px;
+    border-left: 3px solid var(--rust); background: rgba(228,116,79,0.06);
+    font-size: 13.5px; color: var(--text-dim);
+  }
+  .type-card .tc-gotcha b{ color: var(--rust); font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; display:block; margin-bottom: 4px; }
+
+  .type-grid-nav{
+    display:flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 8px;
+  }
+  .type-grid-nav a{
+    font-family: var(--mono); font-size: 12.5px; padding: 5px 11px;
+    border: 1px solid var(--border); border-radius: 20px; color: var(--text-dim);
+  }
+  .type-grid-nav a:hover{ color: var(--amber); border-color: var(--amber-dim); text-decoration: none; }
+
+  .end-note{
+    margin-top: 90px; padding-top: 34px; border-top: 1px solid var(--border-soft);
+    color: var(--text-faint); font-family: var(--mono); font-size: 12.5px; text-align: center;
+  }
+
+  .backtotop{
+    position: fixed; right: 26px; bottom: 26px;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--amber); display:grid; place-items:center;
+    font-family: var(--mono); text-decoration:none; font-size: 16px;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+  }
+  .backtotop.show{ opacity: 1; pointer-events: auto; }
+  .backtotop:hover{ text-decoration:none; border-color: var(--amber-dim); }
+
+  .menu-toggle{ display:none; }
+
+  @media (max-width: 900px){
+    .shell{ grid-template-columns: 1fr; }
+    .sidebar{
+      position: fixed; z-index: 50; left: 0; top: 0; width: 82%; max-width: 320px;
+      transform: translateX(-100%); transition: transform 0.25s ease;
+      box-shadow: 20px 0 40px rgba(0,0,0,0.4);
+    }
+    .sidebar.open{ transform: translateX(0); }
+    main{ padding: 84px 20px 100px; }
+    .menu-toggle{
+      display:flex; position: fixed; top: 16px; left: 16px; z-index: 60;
+      width: 44px; height: 44px; align-items:center; justify-content:center;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--amber); font-family: var(--mono); font-size: 18px;
+    }
+    .pipeline{ flex-direction: column; }
+    .pipeline .stage{ border-right: none; border-bottom: 1px solid var(--border-soft); }
+    .pipeline .stage::after{ content: '↓'; right: 50%; top: auto; bottom: -11px; transform: translateX(50%); }
+    .pipeline .stage:last-child{ border-bottom: none; }
+    .deflist .item{ grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+</head>
+<body id="top">
+
+<button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation">☰</button>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">λ</div>
+      <div class="brand-text"><b>Python, In &amp; Out</b>from source to silicon</div>
+    </div>
+
+    <div class="part-label">
+      <div class="ch-link">
+        <li><a href="./python-part1.html">Part I</a></li>
+        <li><a href="./python-part2.html">Part II</a></li>
+      </div>
+
+      <b>Part III</b>
+      Functions
+    </div>
+
+    <nav class="toc" id="toc">
+      <div class="ch">
+        <a class="ch-link" href="#ch14"><span class="ch-num">14</span> Functions</a>
+        <ul class="sub">
+          <li><a href="#ch14-funcobj">Function objects</a></li>
+          <li><a href="#ch14-params-args">Parameters vs arguments</a></li>
+          <li><a href="#ch14-defaults">Default arguments</a></li>
+          <li><a href="#ch14-keyword">Keyword arguments</a></li>
+          <li><a href="#ch14-posonly">Positional-only</a></li>
+          <li><a href="#ch14-kwonly">Keyword-only</a></li>
+          <li><a href="#ch14-args">*args</a></li>
+          <li><a href="#ch14-kwargs">**kwargs</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch15"><span class="ch-num">15</span> Closures</a>
+        <ul class="sub">
+          <li><a href="#ch15-nested">Nested functions</a></li>
+          <li><a href="#ch15-closures">Closures</a></li>
+          <li><a href="#ch15-freevars">Free variables</a></li>
+          <li><a href="#ch15-cells">Cell objects</a></li>
+          <li><a href="#ch15-nonlocal">nonlocal, revisited</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch16"><span class="ch-num">16</span> Lambda</a>
+        <ul class="sub">
+          <li><a href="#ch16-anon">Anonymous functions</a></li>
+          <li><a href="#ch16-functional">Functional programming in Python</a></li>
+          <li><a href="#ch16-map">map</a></li>
+          <li><a href="#ch16-filter">filter</a></li>
+          <li><a href="#ch16-reduce">reduce</a></li>
+          <li><a href="#ch16-partial">partial</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch17"><span class="ch-num">17</span> Decorators</a>
+        <ul class="sub">
+          <li><a href="#ch17-objects">Functions are objects</a></li>
+          <li><a href="#ch17-higherorder">Higher-order functions</a></li>
+          <li><a href="#ch17-wrapper">Wrapper functions</a></li>
+          <li><a href="#ch17-metadata">Metadata &amp; functools.wraps</a></li>
+          <li><a href="#ch17-functools">functools essentials</a></li>
+          <li><a href="#ch17-classdec">Class decorators</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch18"><span class="ch-num">18</span> Generators</a>
+        <ul class="sub">
+          <li><a href="#ch18-yield">yield</a></li>
+          <li><a href="#ch18-lazy">Lazy evaluation</a></li>
+          <li><a href="#ch18-genobj">Generator objects</a></li>
+          <li><a href="#ch18-send">send()</a></li>
+          <li><a href="#ch18-throw">throw()</a></li>
+          <li><a href="#ch18-close">close()</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch19"><span class="ch-num">19</span> Iterators</a>
+        <ul class="sub">
+          <li><a href="#ch19-iterable">Iterable vs Iterator</a></li>
+          <li><a href="#ch19-iter">iter()</a></li>
+          <li><a href="#ch19-next">next()</a></li>
+          <li><a href="#ch19-protocol">The iterator protocol</a></li>
+          <li><a href="#ch19-genvsiter">Generator vs Iterator</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">
+      06 chapters · functions as first-class objects<br>
+      builds on Parts I &amp; II
+    </div>
+  </aside>
+
+  <main>
+    <div class="content">
+
+      <header class="doc-header">
+        <div class="eyebrow">Python Internals — Study Notes</div>
+        <h1>Part III: Functions</h1>
+        <p class="lede">Functions are Python's most important building block, and also its most misunderstood object type — first-class values with their own memory model, closures that capture state without classes, and two protocols (generators and iterators) that quietly power every <code>for</code> loop you've ever written.</p>
+        <div class="goal-box">
+          <b>Goal of this part</b>
+          Understand functions as real objects with real internal structure — not just "callable blocks of code" — and build a precise mental model of closures, decorators, generators, and iterators: what CPython actually constructs in memory for each, and why they behave the way they do.
+        </div>
+      </header>
+
+      <section class="chapter" id="ch14">
+        <div class="chapter-kicker"><span class="num">CH. 14</span><span class="tag">First-Class</span></div>
+        <h2 class="chapter-title">Functions</h2>
+        <p>Part I's object model (Chapter 4) said "everything is an object" — this chapter takes that claim seriously for functions specifically, then works through every parameter-passing shape Python supports, since the flexibility of Python's calling convention is one of its most heavily used, and most heavily misunderstood, features.</p>
+
+        <h3 id="ch14-funcobj">Function objects</h3>
+        <p>A <code>def</code> statement doesn't just "declare" a function the way it might in a statically compiled language — it <strong>executes</strong>, at runtime, creating an actual <code>function</code> object and binding it to a name in the enclosing namespace, exactly like any other assignment (Chapter 4).</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">greet</span>(name):
+    <span class="k">return</span> f<span class="s">"Hello, {name}"</span>
+
+<span class="f">type</span>(greet)          <span class="c"># &lt;class 'function'&gt; -- an ordinary object, like any int or list</span>
+greet.__name__       <span class="c"># 'greet'</span>
+greet.__code__       <span class="c"># the code object (Part I, Ch.2) -- bytecode + metadata</span>
+greet.__defaults__   <span class="c"># default argument values, as a tuple</span>
+greet.__doc__        <span class="c"># docstring, or None</span>
+
+<span class="c"># Because it's an object, it can be reassigned, stored, passed around freely</span>
+say_hi = greet
+say_hi(<span class="s">"Ada"</span>)          <span class="c"># 'Hello, Ada' -- same function object, different name</span></pre>
+        </div>
+        <p>Concretely, a function object bundles together the <code>code</code> object from Part I's compilation pipeline, a reference to the global namespace it should run against, default argument values, and (as Chapter 15 covers) any captured closure cells — everything the interpreter needs to create a new frame and execute the function's bytecode on demand.</p>
+
+        <h3 id="ch14-params-args">Parameters vs arguments</h3>
+        <p>These two words are often used interchangeably in casual speech, but precisely: a <strong>parameter</strong> is a name in the function's own definition (<code>def f(x):</code> — <code>x</code> is a parameter); an <strong>argument</strong> is the actual value supplied at a specific call site (<code>f(5)</code> — <code>5</code> is the argument). Every call is Python binding arguments to parameters according to a well-defined matching algorithm, covered piece by piece below.</p>
+
+        <h3 id="ch14-defaults">Default arguments</h3>
+        <p>A parameter can specify a default value, used when the caller omits that argument. The critical internal detail: <strong>default values are evaluated exactly once, at <code>def</code>-execution time</strong> — not on every call — and stored on the function object itself (<code>__defaults__</code>).</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">log</span>(message, level=<span class="s">"INFO"</span>):
+    <span class="f">print</span>(f<span class="s">"[{level}] {message}"</span>)
+
+log(<span class="s">"started"</span>)              <span class="c"># [INFO] started</span>
+log(<span class="s">"failed"</span>, <span class="s">"ERROR"</span>)      <span class="c"># [ERROR] failed</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">The mutable default argument trap, precisely</b>
+          Because the default is computed once at definition time and reused for every call that doesn't override it, a <strong>mutable</strong> default (a list, dict, or any mutable object) is <em>shared across all calls</em> — exactly the same underlying mechanism flagged in Part II, Chapter 9. The standard fix: default to <code>None</code>, and create the mutable object fresh inside the function body each call.
+          <div class="code-block" style="margin-top:12px;">
+            <pre><span class="c"># WRONG -- one shared list across every call</span>
+<span class="k">def</span> <span class="f">append_item</span>(item, bucket=[]):
+    bucket.append(item)
+    <span class="k">return</span> bucket
+
+<span class="c"># RIGHT -- a fresh list every call</span>
+<span class="k">def</span> <span class="f">append_item</span>(item, bucket=<span class="k">None</span>):
+    <span class="k">if</span> bucket <span class="k">is</span> <span class="k">None</span>:
+        bucket = []
+    bucket.append(item)
+    <span class="k">return</span> bucket</pre>
+          </div>
+        </div>
+
+        <h3 id="ch14-keyword">Keyword arguments</h3>
+        <p>Any argument can be passed by explicitly naming its parameter at the call site, in any order, as long as every required parameter ends up filled:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">connect</span>(host, port, timeout=<span class="n">30</span>):
+    ...
+
+connect(<span class="s">"localhost"</span>, <span class="n">8080</span>)                       <span class="c"># positional</span>
+connect(host=<span class="s">"localhost"</span>, port=<span class="n">8080</span>)            <span class="c"># keyword, matches positional order</span>
+connect(timeout=<span class="n">5</span>, host=<span class="s">"localhost"</span>, port=<span class="n">8080</span>)  <span class="c"># keyword, ANY order</span></pre>
+        </div>
+        <p>Keyword arguments exist primarily for readability at the call site (<code>connect(timeout=5, ...)</code> is self-documenting in a way <code>connect(..., 5)</code> isn't) and to let callers skip earlier optional parameters while still supplying a later one.</p>
+
+        <h3 id="ch14-posonly">Positional-only parameters</h3>
+        <p><strong>PEP 570</strong> (Python 3.8) added a <code>/</code> marker in a signature: every parameter <em>before</em> it can <strong>only</strong> be passed positionally — supplying it by keyword raises <code>TypeError</code>. This exists to let library authors change a parameter's <em>name</em> later without breaking callers who might have passed it by keyword, and to model real built-ins (many of which have always behaved this way internally):</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">divide</span>(a, b, /, precision=<span class="n">2</span>):
+    <span class="k">return</span> <span class="f">round</span>(a / b, precision)
+
+divide(<span class="n">10</span>, <span class="n">3</span>)                 <span class="c"># fine -- a, b positional</span>
+divide(<span class="n">10</span>, <span class="n">3</span>, precision=<span class="n">4</span>)   <span class="c"># fine -- precision can be keyword</span>
+divide(a=<span class="n">10</span>, b=<span class="n">3</span>)             <span class="c"># TypeError -- a, b are positional-only</span></pre>
+        </div>
+
+        <h3 id="ch14-kwonly">Keyword-only parameters</h3>
+        <p>The mirror image: a bare <code>*</code> in a signature marks every parameter <em>after</em> it as <strong>keyword-only</strong> — it can never be supplied positionally, forcing callers to name it explicitly, usually to keep less-common options readable and unambiguous:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">create_user</span>(name, *, admin=<span class="k">False</span>, active=<span class="k">True</span>):
+    ...
+
+create_user(<span class="s">"Ada"</span>, admin=<span class="k">True</span>)     <span class="c"># fine -- admin passed by keyword</span>
+create_user(<span class="s">"Ada"</span>, <span class="k">True</span>)            <span class="c"># TypeError -- admin is keyword-only, can't be positional</span></pre>
+        </div>
+        <p>Both markers can appear in the same signature — <code>def f(a, b, /, c, *, d):</code> — giving fine-grained control: <code>a, b</code> positional-only, <code>c</code> either, <code>d</code> keyword-only, reading left to right exactly as it's declared.</p>
+
+        <h3 id="ch14-args">*args</h3>
+        <p><code>*args</code> collects any number of extra <strong>positional</strong> arguments into a <code>tuple</code> inside the function — the "packing" counterpart to Chapter 8's unpacking star syntax:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">total</span>(*numbers):
+    <span class="k">return</span> <span class="f">sum</span>(numbers)
+
+total(<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>)     <span class="c"># 10 -- numbers = (1, 2, 3, 4)</span>
+
+<span class="c"># The star also SPREADS an iterable into positional arguments at a call site</span>
+values = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+total(*values)          <span class="c"># same as total(1, 2, 3)</span></pre>
+        </div>
+        <p>The name <code>args</code> is pure convention, not syntax — <code>*whatever</code> works identically; only the leading <code>*</code> is what matters to the interpreter.</p>
+
+        <h3 id="ch14-kwargs">**kwargs</h3>
+        <p><code>**kwargs</code> is the same idea for <strong>keyword</strong> arguments — it collects any number of extra name=value arguments into a <code>dict</code> inside the function:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">build_url</span>(base, **params):
+    query = <span class="s">"&amp;"</span>.join(f<span class="s">"{k}={v}"</span> <span class="k">for</span> k, v <span class="k">in</span> params.items())
+    <span class="k">return</span> f<span class="s">"{base}?{query}"</span>
+
+build_url(<span class="s">"/search"</span>, q=<span class="s">"python"</span>, page=<span class="n">2</span>)   <span class="c"># '/search?q=python&amp;page=2'</span>
+
+<span class="c"># And ** SPREADS a dict into keyword arguments at a call site</span>
+opts = {<span class="s">"q"</span>: <span class="s">"python"</span>, <span class="s">"page"</span>: <span class="n">2</span>}
+build_url(<span class="s">"/search"</span>, **opts)</pre>
+        </div>
+        <p>The full, canonical signature ordering, when all forms are combined, is:</p>
+        <div class="code-block">
+          <div class="code-head"><span>signature order</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">f</span>(pos_only, /, normal, *args, kw_only, **kwargs):
+    ...
+<span class="c"># positional-only -&gt; normal (positional-or-keyword) -&gt; *args -&gt;
+# keyword-only -&gt; **kwargs -- this exact order is enforced by the grammar</span></pre>
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 14 — Key takeaways</div>
+          <ul>
+            <li><code>def</code> is an executable statement that builds a real <code>function</code> object at runtime — functions are first-class values, storable and passable like any other object.</li>
+            <li>Default argument values are computed <strong>once</strong>, at definition time — never use a mutable default; default to <code>None</code> and construct fresh inside the function.</li>
+            <li><code>/</code> and <code>*</code> in a signature carve it into positional-only, normal, and keyword-only zones, giving API authors precise control over how callers are allowed to pass each argument.</li>
+            <li><code>*args</code>/<code>**kwargs</code> both <em>pack</em> extra arguments (in a <code>def</code>) and <em>spread</em> existing collections into arguments (at a call site) — same star syntax, opposite direction, context-dependent.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch15">
+        <div class="chapter-kicker"><span class="num">CH. 15</span><span class="tag">Captured State</span></div>
+        <h2 class="chapter-title">Closures</h2>
+        <p>Part II, Chapter 6 introduced the LEGB rule and the <code>nonlocal</code> keyword. This chapter opens up the actual mechanism behind the "E" (Enclosing) scope — how a nested function can keep using a variable from its enclosing function <em>after that enclosing function has already returned</em>, which is not at all obvious once you remember that a returned function's frame (Part I, Ch. 5) should normally be garbage-collected.</p>
+
+        <h3 id="ch15-nested">Nested functions</h3>
+        <p>Python allows defining a function inside another function — the inner <code>def</code> executes each time the outer function runs, creating a fresh inner function object every call, exactly as described in Chapter 14:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">outer</span>():
+    <span class="k">def</span> <span class="f">inner</span>():
+        <span class="f">print</span>(<span class="s">"hello from inner"</span>)
+    <span class="k">return</span> inner    <span class="c"># returning the FUNCTION OBJECT itself, not calling it</span>
+
+fn = outer()      <span class="c"># fn now holds the inner function object</span>
+fn()              <span class="c"># "hello from inner" -- called later, well after outer() has returned</span></pre>
+        </div>
+        <p>On its own this is unremarkable — but it becomes interesting the moment <code>inner</code> references a name from <code>outer</code>'s local scope.</p>
+
+        <h3 id="ch15-closures">Closures</h3>
+        <p>A <strong>closure</strong> is exactly this situation: a nested function that references a name from an enclosing (but not global) scope, <strong>and is returned or otherwise escapes</strong> that enclosing function — meaning the nested function "closes over" that variable, keeping it alive and accessible for as long as the function itself exists, no matter how long after the outer function has finished running.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">make_multiplier</span>(factor):
+    <span class="k">def</span> <span class="f">multiply</span>(x):
+        <span class="k">return</span> x * factor    <span class="c"># 'factor' is a FREE VARIABLE here -- not local, not global</span>
+    <span class="k">return</span> multiply
+
+double = make_multiplier(<span class="n">2</span>)
+triple = make_multiplier(<span class="n">3</span>)
+
+double(<span class="n">5</span>)     <span class="c"># 10</span>
+triple(<span class="n">5</span>)     <span class="c"># 15 -- a DIFFERENT captured 'factor', from a different call to make_multiplier</span></pre>
+        </div>
+        <p>Each call to <code>make_multiplier</code> creates its own independent closure — <code>double</code> and <code>triple</code> each capture a <em>separate</em> <code>factor</code> value, proving that closures capture <strong>per-call state</strong>, not some single shared slot. This is the standard mechanism behind function factories, and it's the same fundamental idea behind class-based objects with instance state — a closure is, informally, "a poor man's object with exactly one method."</p>
+
+        <h3 id="ch15-freevars">Free variables</h3>
+        <p>A <strong>free variable</strong> is a name used inside a function that is neither a local variable nor a global variable — it belongs to an enclosing function's scope. The compiler (Part I, Ch. 2) statically determines this at compile time by analyzing the nested function's body, and stores the list of such names on the code object:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">make_multiplier</span>(factor):
+    <span class="k">def</span> <span class="f">multiply</span>(x):
+        <span class="k">return</span> x * factor
+    <span class="k">return</span> multiply
+
+multiply_fn = make_multiplier(<span class="n">2</span>)
+multiply_fn.__code__.co_freevars   <span class="c"># ('factor',) -- confirmed free variable</span>
+multiply_fn.__closure__            <span class="c"># (&lt;cell at 0x...: int object at 0x...&gt;,) -- one cell per free variable</span></pre>
+        </div>
+        <p>This is a genuinely different lookup mechanism than plain LEGB global lookup — free variables are resolved through the closure mechanism (cells, below) rather than a namespace dictionary lookup, which is a real, measurable performance difference: closure-variable access compiles to dedicated <code>LOAD_DEREF</code>/<code>STORE_DEREF</code> bytecode instructions (Part I, Ch. 3), distinct from the <code>LOAD_FAST</code>/<code>LOAD_GLOBAL</code> instructions used for ordinary locals and globals.</p>
+
+        <h3 id="ch15-cells">Cell objects</h3>
+        <p>Here is the actual mechanism, and it answers the "how does the variable survive after the outer function returns" question directly: whenever the compiler detects a variable is referenced by a nested function, it doesn't store that variable as a plain local — it wraps it in a <strong>cell object</strong>, a small heap-allocated box that both the outer function's frame and the inner function's closure hold a <em>reference</em> to.</p>
+        <div class="frame-diagram">
+          <div class="frame-box"><div class="fb-title">outer()'s frame (locals)</div><div class="fb-row"><span class="name">factor</span><span class="val">→ cell ●</span></div></div>
+          <div class="frame-box"><div class="fb-title">cell object (heap)</div><div class="fb-row"><span class="name">contents</span><span class="val">2</span></div></div>
+          <div class="frame-box"><div class="fb-title">multiply's __closure__</div><div class="fb-row"><span class="name">[0]</span><span class="val">→ same cell ●</span></div></div>
+        </div>
+        <p>Because it's the <em>cell</em> that's kept alive by reference counting (Part I, Ch. 5) — not the outer frame itself — the cell survives perfectly well after <code>outer()</code> returns and its frame is destroyed, as long as at least one still-alive function object's <code>__closure__</code> tuple still points at it. This is exactly why closures work at all: the captured variable's storage is fundamentally decoupled from the lifetime of the function call that created it.</p>
+        <div class="note warn">
+          <b class="label">Gotcha: the classic late-binding closure bug</b>
+          Closures capture the <strong>cell</strong> (a reference to a mutable box), not a frozen snapshot of the value at definition time — so if the same cell is mutated after the closure is created but before it's called, every closure sharing that cell sees the <em>latest</em> value, not the value from when it was defined:
+          <div class="code-block" style="margin-top:12px;">
+            <pre><span class="c"># WRONG -- all three closures share the SAME loop variable 'i'</span>
+funcs = [<span class="k">lambda</span>: i <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(<span class="n">3</span>)]
+[f() <span class="k">for</span> f <span class="k">in</span> funcs]    <span class="c"># [2, 2, 2] -- NOT [0, 1, 2]! i's final value, read 3 times</span>
+
+<span class="c"># RIGHT -- default argument captures the value AT DEFINITION TIME instead</span>
+funcs = [<span class="k">lambda</span> i=i: i <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(<span class="n">3</span>)]
+[f() <span class="k">for</span> f <span class="k">in</span> funcs]    <span class="c"># [0, 1, 2] -- each lambda got its own default value, bound once</span></pre>
+          </div>
+        </div>
+
+        <h3 id="ch15-nonlocal">nonlocal, revisited</h3>
+        <p>Part II, Chapter 6 introduced <code>nonlocal</code> as the tool for rebinding an enclosing-scope name from within a nested function. Now the mechanism is fully visible: <code>nonlocal count</code> tells the compiler that assignments to <code>count</code> inside this function should write through to the <strong>shared cell</strong>, rather than creating a fresh local — which is exactly what makes the classic stateful-counter closure work:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">make_counter</span>():
+    count = <span class="n">0</span>              <span class="c"># becomes a cell, because 'increment' below references it</span>
+    <span class="k">def</span> <span class="f">increment</span>():
+        <span class="k">nonlocal</span> count
+        count += <span class="n">1</span>          <span class="c"># writes through to the SHARED cell -- STORE_DEREF, not STORE_FAST</span>
+        <span class="k">return</span> count
+    <span class="k">return</span> increment
+
+counter = make_counter()
+counter(), counter(), counter()   <span class="c"># (1, 2, 3) -- the cell persists and accumulates across calls</span></pre>
+        </div>
+        <p>Without <code>nonlocal</code>, <code>count += 1</code> would be treated as a fresh local assignment inside <code>increment</code> (per the LEGB rule from Part II, Ch. 6) and raise <code>UnboundLocalError</code> on the read half of <code>+=</code>, because the compiler would never wire up the cell reference in the first place.</p>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 15 — Key takeaways</div>
+          <ul>
+            <li>A <strong>closure</strong> is a nested function that captures a <strong>free variable</strong> from an enclosing scope and keeps working after that enclosing call has returned.</li>
+            <li>The mechanism is a <strong>cell object</strong> — a heap-allocated box shared by reference between the outer frame and the inner function's <code>__closure__</code> tuple, kept alive by ordinary reference counting.</li>
+            <li>Closures capture the <em>cell</em>, not a value snapshot — this is the root cause of the classic "all lambdas in a loop return the same value" bug, fixed with a default-argument-capture trick.</li>
+            <li><code>nonlocal</code> is what tells the compiler to route an assignment through the shared cell instead of creating a new local, enabling stateful closures like counters.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch16">
+        <div class="chapter-kicker"><span class="num">CH. 16</span><span class="tag">Functional Toolkit</span></div>
+        <h2 class="chapter-title">Lambda &amp; Functional Programming</h2>
+        <p>Python is not a functional language in the Haskell/ML sense, but it borrows several functional-programming tools that lean heavily on the "functions are objects" property from Chapter 14. This chapter covers the anonymous-function syntax and the small toolkit built around passing functions as values.</p>
+
+        <h3 id="ch16-anon">Anonymous functions (lambda)</h3>
+        <p><code>lambda</code> creates a function object without a <code>def</code> statement or a name — useful for small, throwaway functions passed directly as arguments where defining a full named function would be needlessly verbose. A lambda is restricted to a <strong>single expression</strong> (no statements, no multiple lines, no assignments) whose value is implicitly returned.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>square = <span class="k">lambda</span> x: x ** <span class="n">2</span>
+square(<span class="n">5</span>)                 <span class="c"># 25</span>
+
+<span class="c"># Equivalent def -- lambda is genuinely just sugar for this</span>
+<span class="k">def</span> <span class="f">square</span>(x):
+    <span class="k">return</span> x ** <span class="n">2</span>
+
+<span class="c"># Most common real use: as a throwaway "key" function</span>
+people = [(<span class="s">"Bob"</span>, <span class="n">25</span>), (<span class="s">"Ada"</span>, <span class="n">36</span>), (<span class="s">"Cy"</span>, <span class="n">19</span>)]
+people.sort(key=<span class="k">lambda</span> person: person[<span class="n">1</span>])   <span class="c"># sort by age</span></pre>
+        </div>
+        <p>A <code>lambda</code> produces the exact same kind of <code>function</code> object as <code>def</code> (Chapter 14) — same type, same closure-capturing behavior (Chapter 15) — its <em>only</em> differences are syntactic: no name (<code>__name__</code> is literally the string <code>"&lt;lambda&gt;"</code>), and the single-expression-only body restriction.</p>
+        <div class="note warn">
+          <b class="label">Style guidance</b>
+          PEP 8 explicitly discourages <code>name = lambda: ...</code> assignment — if a lambda is important enough to have a name, a regular <code>def</code> gives better tracebacks (a named function shows its real name in stack traces; a lambda always shows <code>&lt;lambda&gt;</code>) and supports docstrings and type annotations. Reserve <code>lambda</code> for genuinely anonymous, inline, throwaway use — almost always as an argument to another function.
+        </div>
+
+        <h3 id="ch16-functional">Functional programming in Python</h3>
+        <p>"Functional" here means treating functions as ordinary values — passing them as arguments, returning them from other functions, and building new behavior by combining them, rather than through explicit loops and mutable state. Chapter 14 (functions as objects) and Chapter 15 (closures) are the two features that make this style possible at all; the rest of this chapter is a tour of the standard tools built on top of them.</p>
+
+        <h3 id="ch16-map">map</h3>
+        <p><code>map(func, iterable)</code> applies <code>func</code> to every item of <code>iterable</code>, <strong>lazily</strong> — it returns an iterator (Chapter 19), not a list, computing each result only as it's requested:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>nums = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>]
+squared = <span class="f">map</span>(<span class="k">lambda</span> x: x ** <span class="n">2</span>, nums)
+squared                     <span class="c"># &lt;map object at 0x...&gt; -- nothing computed yet</span>
+<span class="f">list</span>(squared)              <span class="c"># [1, 4, 9, 16] -- computed now, on demand</span>
+
+<span class="c"># map() also accepts multiple iterables, zipping them positionally</span>
+<span class="f">list</span>(<span class="f">map</span>(<span class="k">lambda</span> a,b: a+b, [<span class="n">1</span>,<span class="n">2</span>,<span class="n">3</span>], [<span class="n">10</span>,<span class="n">20</span>,<span class="n">30</span>]))   <span class="c"># [11, 22, 33]</span></pre>
+        </div>
+        <p>In modern Python style, an equivalent <strong>list comprehension</strong> (<code>[x**2 for x in nums]</code>) is generally preferred for readability — <code>map</code> remains common mainly when the function being applied already exists as a named function (<code>map(str, nums)</code> reads cleanly) rather than a fresh lambda.</p>
+
+        <h3 id="ch16-filter">filter</h3>
+        <p><code>filter(predicate, iterable)</code> keeps only the items for which <code>predicate(item)</code> is truthy — also lazy, also returning an iterator:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>nums = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>, <span class="n">5</span>, <span class="n">6</span>]
+evens = <span class="f">filter</span>(<span class="k">lambda</span> x: x % <span class="n">2</span> == <span class="n">0</span>, nums)
+<span class="f">list</span>(evens)              <span class="c"># [2, 4, 6]</span>
+
+<span class="c"># filter(None, iterable) -- special case: keeps only TRUTHY items</span>
+<span class="f">list</span>(<span class="f">filter</span>(<span class="k">None</span>, [<span class="n">0</span>, <span class="n">1</span>, <span class="s">""</span>, <span class="s">"hi"</span>, [], [<span class="n">1</span>]]))   <span class="c"># [1, 'hi', [1]]</span></pre>
+        </div>
+        <p>Same readability trade-off as <code>map</code>: <code>[x for x in nums if x % 2 == 0]</code> is the idiomatic equivalent most style guides prefer for simple predicates.</p>
+
+        <h3 id="ch16-reduce">reduce</h3>
+        <p><code>functools.reduce(func, iterable, [initial])</code> repeatedly applies a two-argument function, carrying an accumulated result forward, collapsing an entire iterable down to a single value — unlike <code>map</code>/<code>filter</code>, it's <strong>eager</strong>, not lazy, since it must consume the whole iterable to produce its one final result.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> functools <span class="k">import</span> reduce
+
+nums = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>]
+reduce(<span class="k">lambda</span> acc, x: acc + x, nums)         <span class="c"># 10</span>
+reduce(<span class="k">lambda</span> acc, x: acc + x, nums, <span class="n">100</span>)    <span class="c"># 110 -- starts from an explicit initial value</span>
+
+<span class="c"># Trace: ((((0+1) as acc=1) +2 =3) +3=6) +4=10  -- accumulator carried forward each step</span></pre>
+        </div>
+        <div class="note insight">
+          <b class="label">Why reduce moved to functools</b>
+          <code>reduce</code> was a builtin in Python 2 but was demoted to <code>functools</code> in Python 3 — Guido van Rossum specifically argued that most <code>reduce</code> calls are less readable than an equivalent explicit loop, and that the common cases (<code>sum</code>, <code>max</code>, <code>min</code>, <code>any</code>, <code>all</code>) already have dedicated, clearer builtins. Reach for <code>reduce</code> only when no specialized builtin fits.
+        </div>
+
+        <h3 id="ch16-partial">partial</h3>
+        <p><code>functools.partial(func, *args, **kwargs)</code> creates a new callable with some arguments <strong>pre-filled</strong> — "freezing" part of a function's signature to produce a more specialized function, without writing a wrapper <code>def</code> by hand:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> functools <span class="k">import</span> partial
+
+<span class="k">def</span> <span class="f">power</span>(base, exponent):
+    <span class="k">return</span> base ** exponent
+
+square = partial(power, exponent=<span class="n">2</span>)
+cube    = partial(power, exponent=<span class="n">3</span>)
+
+square(<span class="n">5</span>)     <span class="c"># 25  -- equivalent to power(5, exponent=2)</span>
+cube(<span class="n">5</span>)       <span class="c"># 125 -- equivalent to power(5, exponent=3)</span></pre>
+        </div>
+        <p>Under the hood, <code>partial</code> returns a real object (a <code>functools.partial</code> instance, not a plain function) that stores the original callable plus the pre-bound arguments, and calls the original with the stored arguments merged in whenever it's invoked — a small, explicit, introspectable wrapper rather than a closure built by hand, though a hand-written closure (<code>lambda base: power(base, exponent=2)</code>) achieves much the same effect using exactly the mechanism from Chapter 15.</p>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 16 — Key takeaways</div>
+          <ul>
+            <li><code>lambda</code> creates the exact same <code>function</code> object type as <code>def</code> — restricted to a single expression, with no name of its own.</li>
+            <li><code>map</code> and <code>filter</code> are <strong>lazy</strong> (return iterators, Chapter 19); <code>reduce</code> is <strong>eager</strong> (must consume everything to produce its one result).</li>
+            <li>List/generator comprehensions are generally the more idiomatic, more readable alternative to <code>map</code>/<code>filter</code> with a lambda in modern Python.</li>
+            <li><code>partial</code> pre-binds some arguments of an existing function, producing a new, more specialized callable without hand-writing a wrapper.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch17">
+        <div class="chapter-kicker"><span class="num">CH. 17</span><span class="tag">★ Metaprogramming</span></div>
+        <h2 class="chapter-title">Decorators</h2>
+        <p>Decorators are where Chapters 14–16 converge: functions as objects, higher-order functions that take and return other functions, and closures that wrap behavior around existing behavior — combined into one of Python's signature idioms. By the end of this chapter, <code>@decorator</code> syntax should look like exactly what it is: a plain function call in disguise.</p>
+
+        <h3 id="ch17-objects">Functions are objects (why this makes decorators possible)</h3>
+        <p>Chapter 14 established that a <code>def</code> creates a real object. That single fact is the entire foundation decorators are built on: if functions are just objects, then a function can <strong>accept another function as an argument</strong> and <strong>return a function as a result</strong>, exactly like any other value.</p>
+
+        <h3 id="ch17-higherorder">Higher-order functions</h3>
+        <p>A <strong>higher-order function</strong> is any function that takes a function as an argument, returns a function, or both — <code>map</code>, <code>filter</code>, and <code>sorted(..., key=...)</code> from Chapter 16 already qualify. A decorator is simply a higher-order function that <strong>takes one function and returns a (usually different) function</strong>:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">shout</span>(func):
+    <span class="k">def</span> <span class="f">wrapper</span>(*args, **kwargs):
+        result = func(*args, **kwargs)
+        <span class="k">return</span> result.upper()
+    <span class="k">return</span> wrapper
+
+<span class="k">def</span> <span class="f">greet</span>(name):
+    <span class="k">return</span> f<span class="s">"hello, {name}"</span>
+
+greet = shout(greet)    <span class="c"># manually "decorating" -- rebind greet to the wrapped version</span>
+greet(<span class="s">"ada"</span>)             <span class="c"># 'HELLO, ADA'</span></pre>
+        </div>
+        <p><code>@</code> syntax is <strong>pure sugar</strong> for exactly that reassignment pattern:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="nd">@shout</span>
+<span class="k">def</span> <span class="f">greet</span>(name):
+    <span class="k">return</span> f<span class="s">"hello, {name}"</span>
+
+<span class="c"># is EXACTLY equivalent to:
+#
+#   def greet(name):
+#       return f"hello, {name}"
+#   greet = shout(greet)
+#
+# The decorator runs once, at DEFINITION time, immediately replacing
+# the name 'greet' with whatever shout(greet) returns.</span>
+
+greet(<span class="s">"ada"</span>)   <span class="c"># 'HELLO, ADA'</span></pre>
+        </div>
+
+        <h3 id="ch17-wrapper">Wrapper functions &amp; closures at work</h3>
+        <p>The inner <code>wrapper</code> function is a <strong>closure</strong> (Chapter 15) — it captures <code>func</code>, the original function, as a free variable, which is precisely what lets it call the original function later, inside the new behavior. This is why decorators and closures are inseparable topics: without closures, there would be no way for the returned wrapper to remember which original function to call.</p>
+        <div class="code-block">
+          <div class="code-head"><span>timing_decorator.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> time
+
+<span class="k">def</span> <span class="f">timed</span>(func):
+    <span class="k">def</span> <span class="f">wrapper</span>(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)      <span class="c"># call the ORIGINAL function</span>
+        elapsed = time.perf_counter() - start
+        <span class="f">print</span>(f<span class="s">"{func.__name__} took {elapsed:.4f}s"</span>)
+        <span class="k">return</span> result                        <span class="c"># pass its result through unchanged</span>
+    <span class="k">return</span> wrapper
+
+<span class="nd">@timed</span>
+<span class="k">def</span> <span class="f">slow_add</span>(a, b):
+    time.sleep(<span class="n">0.1</span>)
+    <span class="k">return</span> a + b
+
+slow_add(<span class="n">2</span>, <span class="n">3</span>)   <span class="c"># prints "slow_add took 0.1003s", returns 5</span></pre>
+        </div>
+        <p>The <code>*args, **kwargs</code> pattern (Chapter 14) in the wrapper is what lets a single decorator work on functions with <em>any</em> signature — the wrapper doesn't need to know or care what arguments the wrapped function takes; it just forwards everything through transparently.</p>
+
+        <p><strong>Decorators that take their own arguments</strong> need one more level of nesting — a function that returns a decorator, which returns a wrapper:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">retry</span>(times):              <span class="c"># outer: takes the decorator's OWN arguments</span>
+    <span class="k">def</span> <span class="f">decorator</span>(func):        <span class="c"># middle: takes the function being decorated</span>
+        <span class="k">def</span> <span class="f">wrapper</span>(*args, **kwargs):  <span class="c"># inner: the actual replacement function</span>
+            <span class="k">for</span> attempt <span class="k">in</span> <span class="f">range</span>(times):
+                <span class="k">try</span>:
+                    <span class="k">return</span> func(*args, **kwargs)
+                <span class="k">except</span> Exception <span class="k">as</span> e:
+                    <span class="f">print</span>(f<span class="s">"Attempt {attempt+1} failed: {e}"</span>)
+            <span class="k">raise</span> RuntimeError(<span class="s">"All retries failed"</span>)
+        <span class="k">return</span> wrapper
+    <span class="k">return</span> decorator
+
+<span class="nd">@retry</span>(times=<span class="n">3</span>)
+<span class="k">def</span> <span class="f">flaky_call</span>():
+    ...
+
+<span class="c"># @retry(times=3) is a CALL that returns 'decorator', which then
+# decorates flaky_call -- three levels of function, three levels of closure</span></pre>
+        </div>
+
+        <h3 id="ch17-metadata">Metadata &amp; functools.wraps</h3>
+        <p>There's a real cost to the naive wrapper pattern above: once <code>greet</code> is replaced by <code>wrapper</code>, introspection tools see the <em>wrapper's</em> identity, not the original function's — <code>greet.__name__</code> becomes <code>"wrapper"</code>, its docstring disappears, and tools like debuggers, help(), and documentation generators lose the real function's identity entirely.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="nd">@timed</span>
+<span class="k">def</span> <span class="f">slow_add</span>(a, b):
+    <span class="s">"""Add two numbers slowly."""</span>
+    ...
+
+slow_add.__name__   <span class="c"># 'wrapper'  -- WRONG, lost the real name</span>
+slow_add.__doc__    <span class="c"># None       -- WRONG, lost the docstring</span></pre>
+        </div>
+        <p><code>functools.wraps</code> fixes this — it's itself a decorator (applied to the <em>wrapper</em>, inside your decorator's own definition) that copies over <code>__name__</code>, <code>__doc__</code>, <code>__module__</code>, and other metadata from the original function onto the wrapper, and also sets <code>wrapper.__wrapped__ = func</code> so the original is still reachable:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> functools
+
+<span class="k">def</span> <span class="f">timed</span>(func):
+    <span class="nd">@functools.wraps</span>(func)     <span class="c"># the fix -- always do this in real decorators</span>
+    <span class="k">def</span> <span class="f">wrapper</span>(*args, **kwargs):
+        ...
+        <span class="k">return</span> func(*args, **kwargs)
+    <span class="k">return</span> wrapper
+
+<span class="nd">@timed</span>
+<span class="k">def</span> <span class="f">slow_add</span>(a, b):
+    <span class="s">"""Add two numbers slowly."""</span>
+    ...
+
+slow_add.__name__   <span class="c"># 'slow_add' -- correct now</span>
+slow_add.__doc__    <span class="c"># 'Add two numbers slowly.' -- correct now</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Rule of thumb</b>
+          Every decorator you write that defines an inner <code>wrapper</code> should apply <code>@functools.wraps(func)</code> to that wrapper — there's essentially no downside, and skipping it silently degrades debugging, introspection, and any tooling that relies on accurate function metadata.
+        </div>
+
+        <h3 id="ch17-functools">functools essentials</h3>
+        <p>Beyond <code>wraps</code>, <code>reduce</code>, and <code>partial</code> (Chapter 16), the <code>functools</code> module ships several decorators worth knowing directly:</p>
+        <div class="deflist">
+          <div class="item"><dt><code>@functools.lru_cache</code></dt><dd>Memoizes a function's return values keyed by its arguments — repeat calls with the same arguments return the cached result instantly instead of recomputing. <code>maxsize=</code> bounds the cache (evicting least-recently-used entries); <code>maxsize=None</code> means unbounded.</dd></div>
+          <div class="item"><dt><code>@functools.cache</code></dt><dd>Python 3.9+ shorthand for <code>lru_cache(maxsize=None)</code> — an unbounded, simpler-to-spell cache.</dd></div>
+          <div class="item"><dt><code>@functools.singledispatch</code></dt><dd>Turns a function into a <strong>generic function</strong> that dispatches to different implementations based on the type of its first argument — a lightweight form of function overloading, registered incrementally with <code>@func.register</code>.</dd></div>
+          <div class="item"><dt><code>@functools.total_ordering</code></dt><dd>A class decorator (see below) — given just <code>__eq__</code> and one of <code>__lt__</code>/<code>__le__</code>/<code>__gt__</code>/<code>__ge__</code>, fills in the rest of the comparison methods automatically.</dd></div>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> functools
+
+<span class="nd">@functools.lru_cache</span>(maxsize=<span class="n">128</span>)
+<span class="k">def</span> <span class="f">fib</span>(n):
+    <span class="k">if</span> n &lt; <span class="n">2</span>: <span class="k">return</span> n
+    <span class="k">return</span> fib(n-<span class="n">1</span>) + fib(n-<span class="n">2</span>)
+
+fib(<span class="n">35</span>)   <span class="c"># fast -- each unique n computed only once, ever, across all calls</span>
+fib.cache_info()    <span class="c"># CacheInfo(hits=.., misses=.., maxsize=128, currsize=..)</span></pre>
+        </div>
+
+        <h3 id="ch17-classdec">Class decorators</h3>
+        <p>Decorator syntax isn't limited to functions — a <strong><code>@decorator</code></strong> above a <code>class</code> statement works identically: the decorator receives the newly-created <strong>class object</strong> and returns whatever should be bound to that class's name, exactly the same substitution pattern as with functions.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">add_repr</span>(cls):
+    <span class="k">def</span> <span class="f">__repr__</span>(self):
+        <span class="k">return</span> f<span class="s">"{cls.__name__}({self.__dict__})"</span>
+    cls.__repr__ = __repr__     <span class="c"># mutate the class in place...</span>
+    <span class="k">return</span> cls                  <span class="c"># ...and return the SAME class object</span>
+
+<span class="nd">@add_repr</span>
+<span class="k">class</span> <span class="f">Point</span>:
+    <span class="k">def</span> <span class="f">__init__</span>(self, x, y):
+        self.x, self.y = x, y
+
+<span class="f">repr</span>(Point(<span class="n">1</span>, <span class="n">2</span>))   <span class="c"># "Point({'x': 1, 'y': 2})"</span></pre>
+        </div>
+        <p>The built-in <strong><code>@dataclass</code></strong> (from the <code>dataclasses</code> module) is the most widely used class decorator in modern Python — it inspects a class's type-annotated attributes and automatically generates <code>__init__</code>, <code>__repr__</code>, and <code>__eq__</code> for you, eliminating a large amount of boilerplate for simple data-holding classes:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> dataclasses <span class="k">import</span> dataclass
+
+<span class="nd">@dataclass</span>
+<span class="k">class</span> <span class="f">Point</span>:
+    x: <span class="k">int</span>
+    y: <span class="k">int</span>
+
+p = Point(<span class="n">1</span>, <span class="n">2</span>)
+p               <span class="c"># Point(x=1, y=2) -- __repr__ generated automatically</span>
+p == Point(<span class="n">1</span>, <span class="n">2</span>)   <span class="c"># True -- __eq__ generated automatically too</span></pre>
+        </div>
+        <p>A class decorator differs from a class returning a modified <em>instance</em> (which would be normal method logic) in one key way: it operates on the <strong>class itself</strong>, at class-definition time — capable of adding methods, wrapping every method, registering the class somewhere, or even substituting an entirely different class or object in its place.</p>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 17 — Key takeaways</div>
+          <ul>
+            <li><code>@decorator</code> is sugar for <code>name = decorator(name)</code>, executed once at definition time — nothing more mysterious than a higher-order function call.</li>
+            <li>The inner <code>wrapper</code> is a <strong>closure</strong> over the original function; <code>*args, **kwargs</code> lets one decorator wrap functions of any signature.</li>
+            <li>Decorators that take their own arguments need a third level of nesting: args → decorator → wrapper.</li>
+            <li>Always apply <code>@functools.wraps(func)</code> inside a decorator, or the wrapped function silently loses its name, docstring, and other metadata.</li>
+            <li><code>lru_cache</code>/<code>cache</code>, <code>singledispatch</code>, and <code>total_ordering</code> are the highest-value ready-made decorators in <code>functools</code>.</li>
+            <li>Class decorators work identically to function decorators, just operating on a class object — <code>@dataclass</code> is the most common one in modern code.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch18">
+        <div class="chapter-kicker"><span class="num">CH. 18</span><span class="tag">Lazy Execution</span></div>
+        <h2 class="chapter-title">Generators</h2>
+        <p>Every function studied so far runs top to bottom and returns exactly once. This chapter covers a fundamentally different kind of function — one that can <strong>pause mid-execution</strong>, hand a value back to its caller, and later <strong>resume from exactly where it left off</strong>, with all of its local state intact.</p>
+
+        <h3 id="ch18-yield">yield</h3>
+        <p>Any function containing a <code>yield</code> statement anywhere in its body is, by that fact alone, a <strong>generator function</strong> — calling it doesn't run any of its code immediately; it returns a <strong>generator object</strong> instead, and the function body only starts executing once you start pulling values from that object.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">count_up_to</span>(n):
+    i = <span class="n">1</span>
+    <span class="k">while</span> i &lt;= n:
+        <span class="k">yield</span> i     <span class="c"># pause here, hand 'i' back to the caller</span>
+        i += <span class="n">1</span>       <span class="c"># resumes here, next time a value is requested</span>
+
+gen = count_up_to(<span class="n">3</span>)
+gen                    <span class="c"># &lt;generator object count_up_to at 0x...&gt; -- nothing has run yet</span>
+
+<span class="f">next</span>(gen)              <span class="c"># 1 -- runs up to the first yield, then pauses</span>
+<span class="f">next</span>(gen)              <span class="c"># 2 -- resumes right after the yield, runs to the next one</span>
+<span class="f">next</span>(gen)              <span class="c"># 3</span>
+<span class="f">next</span>(gen)              <span class="c"># StopIteration -- loop condition false, function returns, generator is exhausted</span></pre>
+        </div>
+        <p>The most common usage pattern doesn't call <code>next()</code> manually at all — a <code>for</code> loop does it automatically (Part II, Ch. 13), calling <code>next()</code> repeatedly and catching <code>StopIteration</code> for you:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">for</span> num <span class="k">in</span> count_up_to(<span class="n">3</span>):
+    <span class="f">print</span>(num)      <span class="c"># 1, 2, 3 -- one per line</span></pre>
+        </div>
+
+        <h3 id="ch18-lazy">Lazy evaluation</h3>
+        <p>The defining benefit of generators is <strong>laziness</strong>: values are produced <em>one at a time, on demand</em>, rather than all at once up front. This means a generator can represent — and efficiently iterate — sequences that would be impossible or wasteful to materialize as a full list:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">read_large_file</span>(path):
+    <span class="k">with</span> <span class="f">open</span>(path) <span class="k">as</span> f:
+        <span class="k">for</span> line <span class="k">in</span> f:
+            <span class="k">yield</span> line.strip()
+<span class="c"># Processes one line at a time -- memory usage stays flat even for a
+# 50 GB file, because the whole file is never loaded into a list at once.</span>
+
+<span class="k">def</span> <span class="f">naturals</span>():
+    n = <span class="n">1</span>
+    <span class="k">while</span> <span class="k">True</span>:
+        <span class="k">yield</span> n
+        n += <span class="n">1</span>
+<span class="c"># An INFINITE sequence -- perfectly fine as a generator, would be
+# impossible to represent as an actual list.</span></pre>
+        </div>
+        <p>Generator expressions offer the same laziness with comprehension-like syntax — just swap the square brackets for parentheses:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>squares_list = [x**<span class="n">2</span> <span class="k">for</span> x <span class="k">in</span> <span class="f">range</span>(<span class="n">1000000</span>)]   <span class="c"># builds the FULL list in memory now</span>
+squares_gen  = (x**<span class="n">2</span> <span class="k">for</span> x <span class="k">in</span> <span class="f">range</span>(<span class="n">1000000</span>))   <span class="c"># builds NOTHING yet -- lazy</span>
+
+<span class="f">sum</span>(squares_gen)   <span class="c"># computed lazily, one value at a time, as sum() consumes it</span></pre>
+        </div>
+
+        <h3 id="ch18-genobj">Generator objects</h3>
+        <p>What actually gets paused and resumed is a real, heap-allocated object — a generator holds onto its own <strong>frame</strong> (Part I, Ch. 5) between calls, rather than that frame being destroyed on return the way an ordinary function's frame is. This is the entire mechanism, made concrete: <strong>a generator is a function whose frame CPython keeps alive and re-enters, instead of discarding after a single run.</strong></p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>gen = count_up_to(<span class="n">3</span>)
+gen.gi_frame       <span class="c"># the actual, currently-suspended frame object</span>
+gen.gi_running     <span class="c"># False -- True only WHILE a next()/send() call is actively executing it</span>
+<span class="f">next</span>(gen)
+gen.gi_frame.f_lasti   <span class="c"># the exact bytecode offset execution is paused at</span></pre>
+        </div>
+        <p>This is also why a generator object is itself an <strong>iterator</strong> (Chapter 19) — it implements <code>__iter__</code> (returning itself) and <code>__next__</code> (resuming the frame until the next <code>yield</code> or a <code>return</code>/fall-off-the-end, which raises <code>StopIteration</code>).</p>
+
+        <h3 id="ch18-send">send()</h3>
+        <p><code>yield</code> isn't only an exit point — it's also an <strong>expression</strong> that can receive a value pushed <em>into</em> the generator from outside, via <code>gen.send(value)</code>. This makes communication genuinely bidirectional, turning a generator into something closer to a lightweight coroutine:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">echo</span>():
+    <span class="k">while</span> <span class="k">True</span>:
+        received = <span class="k">yield</span>          <span class="c"># pauses here; the SENT value becomes this expression's result</span>
+        <span class="f">print</span>(f<span class="s">"got: {received}"</span>)
+
+gen = echo()
+<span class="f">next</span>(gen)              <span class="c"># REQUIRED "priming" call -- advances to the first yield</span>
+gen.send(<span class="s">"hello"</span>)     <span class="c"># prints "got: hello" -- resumes, 'received' = "hello"</span>
+gen.send(<span class="s">"world"</span>)     <span class="c"># prints "got: world"</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha</b>
+          A freshly created generator must be advanced once with <code>next(gen)</code> (or <code>gen.send(None)</code>, which is equivalent) before you can meaningfully <code>send()</code> a real value — you can't send a value into a generator that hasn't reached its first <code>yield</code> yet; doing so raises <code>TypeError</code>.
+        </div>
+
+        <h3 id="ch18-throw">throw()</h3>
+        <p><code>gen.throw(exc_type)</code> raises an exception <strong>at the point where the generator is currently paused</strong> — as if that <code>yield</code> expression itself had raised it — letting the generator's own <code>try</code>/<code>except</code> logic handle cleanup or react to external signals:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">resilient</span>():
+    <span class="k">while</span> <span class="k">True</span>:
+        <span class="k">try</span>:
+            <span class="k">yield</span> <span class="s">"working"</span>
+        <span class="k">except</span> ValueError:
+            <span class="f">print</span>(<span class="s">"recovered from ValueError, continuing"</span>)
+
+gen = resilient()
+<span class="f">next</span>(gen)                    <span class="c"># 'working'</span>
+gen.throw(ValueError)         <span class="c"># prints "recovered..." -- caught INSIDE the generator, execution continues</span></pre>
+        </div>
+
+        <h3 id="ch18-close">close()</h3>
+        <p><code>gen.close()</code> raises <code>GeneratorExit</code> at the generator's current suspension point, which is the signal for it to run any cleanup code (typically in a <code>finally</code> block) and then stop — after <code>close()</code>, the generator is permanently exhausted, and any further <code>next()</code> call raises <code>StopIteration</code>.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">managed_resource</span>():
+    <span class="f">print</span>(<span class="s">"acquiring"</span>)
+    <span class="k">try</span>:
+        <span class="k">yield</span> <span class="s">"resource"</span>
+    <span class="k">finally</span>:
+        <span class="f">print</span>(<span class="s">"releasing"</span>)   <span class="c"># guaranteed to run, even on close() or garbage collection</span>
+
+gen = managed_resource()
+<span class="f">next</span>(gen)          <span class="c"># prints "acquiring", yields "resource"</span>
+gen.close()         <span class="c"># prints "releasing" -- finally block runs in response to GeneratorExit</span></pre>
+        </div>
+        <p>This <code>finally</code>-based cleanup also runs automatically if a generator is simply <strong>garbage collected</strong> while still suspended (Part I, Ch. 5's reference counting takes care of calling <code>close()</code> as part of destruction) — which is why generator-based resource management (a pattern also underlying <code>@contextlib.contextmanager</code>) is considered safe even if a caller never explicitly finishes iterating.</p>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 18 — Key takeaways</div>
+          <ul>
+            <li>Any function with <code>yield</code> in its body becomes a <strong>generator function</strong> — calling it produces a generator object without running any code yet.</li>
+            <li>A generator is, mechanically, a <strong>persistent frame</strong> CPython keeps alive and re-enters across <code>next()</code> calls, rather than discarding after one run.</li>
+            <li><strong>Laziness</strong> is the core value proposition — process infinite or huge sequences with flat, constant memory use.</li>
+            <li><code>send()</code>, <code>throw()</code>, and <code>close()</code> turn a generator into a two-way communication channel — values in via <code>send</code>, exceptions in via <code>throw</code>, guaranteed cleanup via <code>close</code> and <code>finally</code>.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch19">
+        <div class="chapter-kicker"><span class="num">CH. 19</span><span class="tag">Protocol</span></div>
+        <h2 class="chapter-title">Iterators</h2>
+        <p>Chapter 18's generators are, it turns out, just <em>one specific implementation</em> of a much more general protocol — the same protocol that makes <code>for</code> loops, unpacking (Part II, Ch. 8), and comprehensions all work uniformly across lists, dicts, files, and custom objects alike. This closing chapter names that protocol explicitly.</p>
+
+        <h3 id="ch19-iterable">Iterable vs Iterator — a distinction worth being precise about</h3>
+        <p>These two words are related but describe different roles, and confusing them is a common source of misunderstanding:</p>
+        <div class="deflist">
+          <div class="item"><dt>Iterable</dt><dd>Any object you <em>can</em> iterate over — anything implementing <code>__iter__</code>, which returns a fresh iterator each time it's called. Lists, dicts, strings, sets, and files are all iterable. An iterable can be iterated over <strong>multiple times, independently</strong> — each <code>iter(my_list)</code> call gets its own fresh starting point.</dd></div>
+          <div class="item"><dt>Iterator</dt><dd>The object that actually does the iterating — implementing <strong>both</strong> <code>__iter__</code> (returning itself) <strong>and</strong> <code>__next__</code> (producing the next value, or raising <code>StopIteration</code> when exhausted). An iterator is <strong>single-use and stateful</strong> — once exhausted, it stays exhausted; you can't rewind it.</dd></div>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>nums = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]      <span class="c"># nums is ITERABLE -- has __iter__</span>
+<span class="f">iter</span>(nums)                <span class="c"># &lt;list_iterator object&gt; -- a fresh ITERATOR, has __next__</span>
+
+it1 = <span class="f">iter</span>(nums)
+it2 = <span class="f">iter</span>(nums)
+<span class="f">next</span>(it1); <span class="f">next</span>(it1)    <span class="c"># it1 has advanced two steps</span>
+<span class="f">next</span>(it2)                <span class="c"># it2 is INDEPENDENT -- still only one step in</span>
+
+<span class="c"># A list is iterable but NOT itself an iterator -- it has no __next__:</span>
+<span class="f">next</span>(nums)                <span class="c"># TypeError: 'list' object is not an iterator</span></pre>
+        </div>
+        <p>Every iterator is also, trivially, an iterable (its <code>__iter__</code> just returns itself) — but not every iterable is an iterator. A list is the clearest example of the difference: it's iterable, but you must call <code>iter()</code> on it to get something you can actually call <code>next()</code> on.</p>
+
+        <h3 id="ch19-iter">iter()</h3>
+        <p>The builtin <code>iter(obj)</code> is what a <code>for</code> loop calls implicitly, exactly once, at the very start of iteration. It works by calling <code>obj.__iter__()</code> — and there's a lesser-known second form: <code>iter(callable, sentinel)</code>, which repeatedly calls <code>callable()</code> until it returns a value equal to <code>sentinel</code>, useful for reading from things like a file or socket in fixed chunks until a stop marker appears:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c"># Two-argument iter() -- call a function repeatedly until it returns the sentinel</span>
+<span class="k">with</span> <span class="f">open</span>(<span class="s">"data.bin"</span>, <span class="s">"rb"</span>) <span class="k">as</span> f:
+    <span class="k">for</span> chunk <span class="k">in</span> <span class="f">iter</span>(<span class="k">lambda</span>: f.read(<span class="n">1024</span>), <span class="s">b""</span>):
+        process(chunk)
+    <span class="c"># stops automatically once f.read(1024) returns b"" (empty bytes = sentinel)</span></pre>
+        </div>
+
+        <h3 id="ch19-next">next()</h3>
+        <p><code>next(it)</code> calls <code>it.__next__()</code>, producing the next value or propagating <code>StopIteration</code> when the iterator is exhausted. It accepts an optional second argument as a default, returned instead of letting <code>StopIteration</code> propagate:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>it = <span class="f">iter</span>([<span class="n">1</span>, <span class="n">2</span>])
+<span class="f">next</span>(it)          <span class="c"># 1</span>
+<span class="f">next</span>(it)          <span class="c"># 2</span>
+<span class="f">next</span>(it)          <span class="c"># StopIteration -- raised, uncaught</span>
+
+it2 = <span class="f">iter</span>([<span class="n">1</span>])
+<span class="f">next</span>(it2, <span class="s">"done"</span>)   <span class="c"># 1</span>
+<span class="f">next</span>(it2, <span class="s">"done"</span>)   <span class="c"># 'done' -- default returned instead of raising</span></pre>
+        </div>
+
+        <h3 id="ch19-protocol">The iterator protocol, implemented by hand</h3>
+        <p>Since the protocol is just two dunder methods, any custom class can participate — this is exactly what makes user-defined classes work seamlessly with <code>for</code> loops, <code>list()</code>, unpacking, and every other iteration context in the language:</p>
+        <div class="code-block">
+          <div class="code-head"><span>custom_iterator.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">class</span> <span class="f">CountUpTo</span>:
+    <span class="s">"""Iterable AND iterator in one class -- a common, simple pattern."""</span>
+    <span class="k">def</span> <span class="f">__init__</span>(self, n):
+        self.n = n
+        self.i = <span class="n">0</span>
+
+    <span class="k">def</span> <span class="f">__iter__</span>(self):
+        <span class="k">return</span> self          <span class="c"># the class IS its own iterator</span>
+
+    <span class="k">def</span> <span class="f">__next__</span>(self):
+        <span class="k">if</span> self.i &gt;= self.n:
+            <span class="k">raise</span> StopIteration    <span class="c"># the REQUIRED signal that iteration is done</span>
+        self.i += <span class="n">1</span>
+        <span class="k">return</span> self.i
+
+<span class="k">for</span> num <span class="k">in</span> CountUpTo(<span class="n">3</span>):
+    <span class="f">print</span>(num)      <span class="c"># 1, 2, 3</span></pre>
+        </div>
+        <p>This is precisely what a <code>for</code> loop does mechanically, spelled out — the exact desugaring, tying directly back to Part II, Chapter 13:</p>
+        <div class="code-block">
+          <div class="code-head"><span>what "for x in obj:" really does</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>_iterator = <span class="f">iter</span>(obj)
+<span class="k">while</span> <span class="k">True</span>:
+    <span class="k">try</span>:
+        x = <span class="f">next</span>(_iterator)
+    <span class="k">except</span> StopIteration:
+        <span class="k">break</span>
+    <span class="c"># ... loop body using x ...</span></pre>
+        </div>
+
+        <h3 id="ch19-genvsiter">Generator vs Iterator</h3>
+        <p>Every generator <em>is</em> an iterator (it implements both dunders, as Chapter 18 noted) — but writing a generator with <code>yield</code> is a vastly more convenient way to get one than hand-rolling a class like <code>CountUpTo</code> above. The comparison:</p>
+        <table>
+          <tr><th></th><th>Hand-written iterator (class)</th><th>Generator (<code>yield</code>)</th></tr>
+          <tr><td>Definition</td><td>A class with <code>__iter__</code> + <code>__next__</code>, manual state tracking (<code>self.i</code>, etc.)</td><td>A function with <code>yield</code> — state is just ordinary local variables, automatically preserved by the paused frame</td></tr>
+          <tr><td>Verbosity</td><td>More boilerplate — explicit state fields, explicit <code>StopIteration</code></td><td>Minimal — the function body reads like a normal, linear algorithm</td></tr>
+          <tr><td>Two-way communication</td><td>Possible, but must be built by hand (extra methods)</td><td>Built in — <code>send()</code>, <code>throw()</code>, <code>close()</code> (Chapter 18)</td></tr>
+          <tr><td>When to prefer it</td><td>When you need more than one method, custom <code>__iter__</code> behavior distinct from iteration itself, or non-generator-expressible control</td><td>The default choice for the overwhelming majority of custom iteration needs</td></tr>
+        </table>
+        <p>In practice: reach for a generator function first, every time, unless you have a specific reason a plain class serves better — the boilerplate reduction is substantial and the resulting code is almost always easier to read and maintain.</p>
+
+        <div class="note insight">
+          <b class="label">Tying Part III together</b>
+          The through-line across this entire part: functions are objects (Ch. 14) → closures let them carry state (Ch. 15) → higher-order functions compose them (Ch. 16) → decorators wrap them (Ch. 17) → generators are functions that pause and resume via a persistent frame (Ch. 18) → and that pause/resume capability turns out to be a specific, convenient implementation of the general two-method iterator protocol (Ch. 19) that quietly underlies every <code>for</code> loop in the language.
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 19 — Key takeaways</div>
+          <ul>
+            <li><strong>Iterable</strong> = has <code>__iter__</code>, can produce a fresh iterator repeatedly. <strong>Iterator</strong> = has both <code>__iter__</code> and <code>__next__</code>, is single-use and stateful.</li>
+            <li><code>for x in obj:</code> desugars to calling <code>iter(obj)</code> once, then <code>next()</code> repeatedly until <code>StopIteration</code> — this is the exact mechanism, not an approximation.</li>
+            <li>Any class can implement the two-method protocol by hand to become iterable; a generator function gets you the same result with dramatically less code.</li>
+            <li>Prefer generators over hand-written iterator classes by default — reach for a class only when you need capabilities a generator genuinely can't express.</li>
+          </ul>
+        </div>
+      </section>
+
+
+
+<div class="end-note">
+        END OF PART III · continue to Part IV when ready
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<a href="#top" class="backtotop" id="backtotop">↑</a>
+
+<script>
+  // Mobile sidebar toggle
+  const sidebar = document.getElementById('sidebar');
+  const menuToggle = document.getElementById('menuToggle');
+  menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  document.querySelectorAll('.sidebar a').forEach(a => a.addEventListener('click', () => sidebar.classList.remove('open')));
+
+  // Back to top visibility
+  const backtotop = document.getElementById('backtotop');
+  window.addEventListener('scroll', () => {
+    backtotop.classList.toggle('show', window.scrollY > 600);
+  });
+
+  // Scroll-spy active link highlighting
+  const links = Array.from(document.querySelectorAll('nav.toc a'));
+  const targets = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const id = '#' + entry.target.id;
+      const link = links.find(a => a.getAttribute('href') === id);
+      if (!link) return;
+      if (entry.isIntersecting){
+        links.forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  targets.forEach(t => io.observe(t));
+</script>
+
+</body>
+</html>

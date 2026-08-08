@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Python Works Internally — Part II: Core Python Language</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0d13;
+    --bg-raise: #10141c;
+    --panel: #131926;
+    --panel-2: #161d2c;
+    --grid-line: #1c2433;
+    --border: #232c3d;
+    --border-soft: #1a2130;
+    --text: #dfe4ec;
+    --text-dim: #9aa5b6;
+    --text-faint: #5f6a7d;
+    --amber: #f0a83c;
+    --amber-dim: #b9822f;
+    --blue: #6fb3e0;
+    --blue-dim: #3f6a8a;
+    --rust: #e4744f;
+    --green: #7fc79e;
+    --violet: #b394d6;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --maxw: 860px;
+  }
+
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+
+  body{
+    margin: 0;
+    background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 100% 42px,
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 42px 100%,
+      var(--bg);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection{ background: var(--amber); color: #16110a; }
+
+  a{ color: var(--blue); text-decoration: none; }
+  a:hover{ text-decoration: underline; }
+
+  code, pre, .mono{ font-family: var(--mono); }
+
+  /* ---------- Layout shell ---------- */
+  .shell{
+    display: grid;
+    grid-template-columns: 300px minmax(0,1fr);
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: rgba(10,13,19,0.9);
+    backdrop-filter: blur(6px);
+    padding: 28px 20px 60px;
+  }
+  .sidebar::-webkit-scrollbar{ width: 8px; }
+  .sidebar::-webkit-scrollbar-thumb{ background: var(--border); border-radius: 4px; }
+
+  .brand{
+    display:flex; align-items:center; gap: 10px;
+    margin-bottom: 6px;
+  }
+  .brand-mark{
+    width: 30px; height: 30px; flex: none;
+    border: 1px solid var(--amber-dim);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    color: var(--amber);
+    font-family: var(--mono); font-weight: 700; font-size: 13px;
+    background: linear-gradient(160deg, rgba(240,168,60,0.14), transparent);
+  }
+  .brand-text{ font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); letter-spacing: 0.02em; line-height: 1.35;}
+  .brand-text b{ color: var(--text); display:block; font-size: 13px; }
+
+  .part-label{
+    margin: 22px 0 18px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--amber);
+    background: var(--panel);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .part-label b{ display:block; color: var(--text); font-size: 13px; margin-bottom: 3px; letter-spacing: 0; }
+
+  nav.toc{ font-size: 13.5px; }
+  nav.toc .ch{ margin-bottom: 4px; }
+  nav.toc .ch-link{
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 7px 8px;
+    border-radius: 5px;
+    color: var(--text);
+    font-weight: 600;
+  }
+  nav.toc .ch-link:hover{ background: var(--panel); text-decoration:none; }
+  nav.toc .ch-link.active{ background: var(--panel-2); color: var(--amber); }
+  nav.toc .ch-num{ font-family: var(--mono); color: var(--text-faint); font-size: 12px; flex: none; }
+  nav.toc .ch-link.active .ch-num{ color: var(--amber-dim); }
+
+  nav.toc .sub{ list-style: none; margin: 2px 0 10px 30px; padding: 0; border-left: 1px solid var(--border-soft); }
+  nav.toc .sub li a{
+    display: block;
+    padding: 4px 0 4px 12px;
+    color: var(--text-dim);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  nav.toc .sub li a:hover{ color: var(--text); text-decoration: none; }
+  nav.toc .sub li a.active{ color: var(--amber); }
+
+  .sidebar-foot{
+    margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+    font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); line-height:1.6;
+  }
+
+  /* ---------- Main content ---------- */
+  main{ min-width: 0; padding: 64px 48px 140px; }
+  .content{ max-width: var(--maxw); margin: 0 auto; }
+
+  .doc-header{ margin-bottom: 64px; }
+  .doc-header .eyebrow{
+    font-family: var(--mono); color: var(--amber); font-size: 12.5px;
+    letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 14px;
+  }
+  .doc-header h1{
+    font-family: var(--mono); font-size: clamp(28px, 4vw, 42px);
+    line-height: 1.2; margin: 0 0 18px; color: #fff; letter-spacing: -0.01em;
+  }
+  .doc-header .lede{ color: var(--text-dim); font-size: 17px; max-width: 640px; }
+  .doc-header .goal-box{
+    margin-top: 28px; padding: 16px 18px;
+    border: 1px dashed var(--border);
+    background: var(--panel);
+    font-size: 14px; color: var(--text-dim);
+  }
+  .doc-header .goal-box b{ color: var(--amber); font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; display:block; margin-bottom: 6px;}
+
+  section.chapter{ padding-top: 30px; margin-top: 10px; scroll-margin-top: 24px; }
+  section.chapter + section.chapter{ border-top: 1px solid var(--border-soft); margin-top: 80px; padding-top: 70px; }
+
+  .chapter-kicker{
+    display:flex; align-items:center; gap: 14px; margin-bottom: 10px;
+  }
+  .chapter-kicker .num{
+    font-family: var(--mono); font-size: 13px; color: var(--bg);
+    background: var(--amber); border-radius: 4px; padding: 3px 8px; font-weight: 700;
+  }
+  .chapter-kicker .tag{ font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  h2.chapter-title{
+    font-family: var(--mono); font-size: clamp(24px,3vw,32px);
+    color: #fff; margin: 0 0 26px; letter-spacing: -0.01em; scroll-margin-top: 24px;
+  }
+
+  h3{
+    font-family: var(--mono); font-size: 19px; color: var(--amber);
+    margin: 46px 0 14px; letter-spacing: -0.01em; scroll-margin-top: 24px;
+    display:flex; align-items:baseline; gap:10px;
+  }
+  h3::before{ content: '§'; color: var(--text-faint); font-size: 15px; }
+
+  h4{ font-family: var(--mono); font-size: 15px; color: var(--blue); margin: 26px 0 10px; }
+
+  p{ margin: 0 0 16px; color: var(--text); }
+  p.dim, li.dim{ color: var(--text-dim); }
+  strong{ color: #fff; font-weight: 600; }
+  em.term{ color: var(--amber); font-style: normal; font-weight: 600; }
+
+  ul, ol{ margin: 0 0 18px; padding-left: 22px; color: var(--text); }
+  li{ margin-bottom: 8px; }
+  li::marker{ color: var(--amber-dim); }
+
+  /* inline code */
+  :not(pre) > code{
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--blue);
+    padding: 1.5px 6px;
+    border-radius: 4px;
+    font-size: 0.87em;
+  }
+
+  /* code blocks */
+  .code-block{
+    margin: 20px 0 26px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1119;
+  }
+  .code-head{
+    display:flex; align-items:center; justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .code-head .dots{ display:flex; gap:5px; }
+  .code-head .dots span{ width:8px; height:8px; border-radius:50%; background: var(--border); display:inline-block; }
+  pre{
+    margin: 0; padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.3px;
+    line-height: 1.65;
+    color: #d7dde6;
+  }
+  pre .c{ color: var(--text-faint); font-style: italic; } /* comment */
+  pre .k{ color: var(--violet); } /* keyword */
+  pre .s{ color: var(--green); } /* string */
+  pre .n{ color: var(--amber); } /* number/name emphasis */
+  pre .f{ color: var(--blue); } /* function/builtin */
+  pre .o{ color: var(--rust); } /* operator/opcode */
+
+  /* callouts */
+  .note{
+    margin: 22px 0; padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--blue);
+    background: var(--panel);
+    font-size: 14.5px; color: var(--text-dim);
+  }
+  .note b.label{ color: var(--blue); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display:block; margin-bottom: 6px; }
+
+  .warn{ border-left-color: var(--rust); }
+  .warn b.label{ color: var(--rust); }
+
+  .insight{ border-left-color: var(--amber); }
+  .insight b.label{ color: var(--amber); }
+
+  .exercise{
+    margin: 26px 0; padding: 16px 18px;
+    border: 1px solid var(--amber-dim);
+    background: linear-gradient(160deg, rgba(240,168,60,0.06), transparent);
+    font-size: 14.5px;
+  }
+  .exercise b.label{ color: var(--amber); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display:block; margin-bottom: 8px; }
+  .exercise ol, .exercise ul{ margin-bottom: 0; }
+
+  /* tables */
+  table{ width: 100%; border-collapse: collapse; margin: 20px 0 28px; font-size: 14px; }
+  th, td{ text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  th{ font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); border-bottom: 1px solid var(--border); }
+  td code{ white-space: nowrap; }
+  tr:hover td{ background: rgba(255,255,255,0.015); }
+
+  /* pipeline diagram (signature element for ch.2 but reused) */
+  .pipeline{
+    display:flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+    margin: 30px 0 34px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    overflow-x: auto;
+  }
+  .pipeline .stage{
+    flex: 1 1 0; min-width: 118px;
+    padding: 16px 14px;
+    border-right: 1px solid var(--border-soft);
+    position: relative;
+  }
+  .pipeline .stage:last-child{ border-right: none; }
+  .pipeline .stage .k{ font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .pipeline .stage .v{ font-family: var(--mono); font-size: 14px; color: var(--amber); margin-top: 6px; font-weight: 600; }
+  .pipeline .stage .d{ font-size: 11.5px; color: var(--text-dim); margin-top: 5px; line-height: 1.4; }
+  .pipeline .stage::after{
+    content: '→';
+    position: absolute; right: -11px; top: 50%; transform: translateY(-50%);
+    color: var(--text-faint); font-size: 14px; z-index: 2;
+  }
+  .pipeline .stage:last-child::after{ content: ''; }
+
+  /* frame/stack diagram box, used heavily in ch4/ch5 */
+  .frame-diagram{
+    display: grid; gap: 10px;
+    margin: 24px 0 30px;
+    grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+  }
+  .frame-box{
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 12px 14px;
+    border-radius: 6px;
+  }
+  .frame-box .fb-title{ font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .frame-box .fb-row{ display:flex; justify-content: space-between; font-family: var(--mono); font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .frame-box .fb-row:last-child{ border-bottom: none; }
+  .frame-box .fb-row .name{ color: var(--blue); }
+  .frame-box .fb-row .val{ color: var(--text-dim); }
+
+  /* key/value definition list */
+  .deflist{ margin: 20px 0 28px; }
+  .deflist .item{ display: grid; grid-template-columns: 160px 1fr; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+  .deflist .item dt{ font-family: var(--mono); color: var(--amber); font-size: 13.5px; font-weight: 600; }
+  .deflist .item dd{ margin: 0; color: var(--text-dim); font-size: 14.5px; }
+
+  .qa{ margin: 20px 0 28px; }
+  .qa .q{ font-family: var(--mono); color: #fff; font-size: 14.5px; font-weight: 600; margin-bottom: 6px; }
+  .qa .q::before{ content: 'Q. '; color: var(--amber); }
+  .qa .a{ color: var(--text-dim); font-size: 14.5px; margin-bottom: 22px; padding-left: 20px; border-left: 2px solid var(--border); }
+
+  .chapter-summary{
+    margin-top: 50px; padding: 20px 22px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .chapter-summary .cs-title{ font-family: var(--mono); color: var(--amber); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .chapter-summary ul{ margin-bottom: 0; }
+  .chapter-summary li{ font-size: 14px; color: var(--text-dim); }
+
+  /* type-spec cards, used heavily in Ch.9 */
+  .type-card{
+    margin: 34px 0; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); overflow: hidden;
+  }
+  .type-card .tc-head{
+    display:flex; align-items:center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    padding: 14px 18px; background: var(--panel-2); border-bottom: 1px solid var(--border);
+  }
+  .type-card .tc-head .tc-name{ font-family: var(--mono); font-size: 18px; color: #fff; font-weight: 700; }
+  .type-card .tc-head .tc-name code{ background:none; border:none; padding:0; color:#fff; font-size: 1em; }
+  .type-card .tc-badge{
+    font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 3px 9px; border-radius: 20px; border: 1px solid var(--border);
+  }
+  .type-card .tc-badge.immutable{ color: var(--blue); border-color: var(--blue-dim); }
+  .type-card .tc-badge.mutable{ color: var(--rust); border-color: var(--rust); }
+  .type-card .tc-body{ padding: 18px 20px 6px; }
+  .type-card h5{
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.08em; margin: 20px 0 8px;
+  }
+  .type-card h5:first-child{ margin-top: 0; }
+  .type-card p{ font-size: 14.5px; margin-bottom: 12px; }
+  .type-card table{ margin: 6px 0 16px; font-size: 13px; }
+  .type-card table th, .type-card table td{ padding: 6px 10px; }
+  .type-card ul{ margin-bottom: 12px; padding-left: 20px; }
+  .type-card li{ font-size: 14px; margin-bottom: 6px; }
+  .type-card .tc-gotcha{
+    margin: 14px 0 18px; padding: 10px 14px;
+    border-left: 3px solid var(--rust); background: rgba(228,116,79,0.06);
+    font-size: 13.5px; color: var(--text-dim);
+  }
+  .type-card .tc-gotcha b{ color: var(--rust); font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; display:block; margin-bottom: 4px; }
+
+  .type-grid-nav{
+    display:flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 8px;
+  }
+  .type-grid-nav a{
+    font-family: var(--mono); font-size: 12.5px; padding: 5px 11px;
+    border: 1px solid var(--border); border-radius: 20px; color: var(--text-dim);
+  }
+  .type-grid-nav a:hover{ color: var(--amber); border-color: var(--amber-dim); text-decoration: none; }
+
+  .end-note{
+    margin-top: 90px; padding-top: 34px; border-top: 1px solid var(--border-soft);
+    color: var(--text-faint); font-family: var(--mono); font-size: 12.5px; text-align: center;
+  }
+
+  .backtotop{
+    position: fixed; right: 26px; bottom: 26px;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--amber); display:grid; place-items:center;
+    font-family: var(--mono); text-decoration:none; font-size: 16px;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+  }
+  .backtotop.show{ opacity: 1; pointer-events: auto; }
+  .backtotop:hover{ text-decoration:none; border-color: var(--amber-dim); }
+
+  .menu-toggle{ display:none; }
+
+  @media (max-width: 900px){
+    .shell{ grid-template-columns: 1fr; }
+    .sidebar{
+      position: fixed; z-index: 50; left: 0; top: 0; width: 82%; max-width: 320px;
+      transform: translateX(-100%); transition: transform 0.25s ease;
+      box-shadow: 20px 0 40px rgba(0,0,0,0.4);
+    }
+    .sidebar.open{ transform: translateX(0); }
+    main{ padding: 84px 20px 100px; }
+    .menu-toggle{
+      display:flex; position: fixed; top: 16px; left: 16px; z-index: 60;
+      width: 44px; height: 44px; align-items:center; justify-content:center;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--amber); font-family: var(--mono); font-size: 18px;
+    }
+    .pipeline{ flex-direction: column; }
+    .pipeline .stage{ border-right: none; border-bottom: 1px solid var(--border-soft); }
+    .pipeline .stage::after{ content: '↓'; right: 50%; top: auto; bottom: -11px; transform: translateX(50%); }
+    .pipeline .stage:last-child{ border-bottom: none; }
+    .deflist .item{ grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+</head>
+<body id="top">
+
+<button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation">☰</button>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">λ</div>
+      <div class="brand-text"><b>Python, In &amp; Out</b>from source to silicon</div>
+    </div>
+    
+    <div class="part-label">
+      <div class="ch">
+        <li><a href="./python-part1.html">Part I</a></li>
+      </div>
+      <b>Part II</b>
+      Core Python Language
+      <div class="ch">
+      <li><a href="./python-part3.html">Part III</a></li>
+      </div>
+    </div>
+
+    <nav class="toc" id="toc">
+      <div class="ch">
+        <a class="ch-link" href="#ch8"><span class="ch-num">08</span> Variables &amp; Assignment</a>
+        <ul class="sub">
+          <li><a href="#ch8-multi">Multiple assignment</a></li>
+          <li><a href="#ch8-tuple-unpack">Tuple unpacking</a></li>
+          <li><a href="#ch8-extended">Extended unpacking</a></li>
+          <li><a href="#ch8-swap">Swapping</a></li>
+          <li><a href="#ch8-walrus">Walrus operator</a></li>
+          <li><a href="#ch8-destructure">Destructuring</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch9"><span class="ch-num">09</span> Python Data Types</a>
+        <ul class="sub">
+          <li><a href="#ch9-immutable">Immutable types</a></li>
+          <li><a href="#ch9-mutable">Mutable types</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch10"><span class="ch-num">10</span> Strings</a>
+        <ul class="sub">
+          <li><a href="#ch10-unicode">Unicode</a></li>
+          <li><a href="#ch10-utf8">UTF-8</a></li>
+          <li><a href="#ch10-interning">Interning</a></li>
+          <li><a href="#ch10-slicing">Slicing</a></li>
+          <li><a href="#ch10-formatting">Formatting &amp; f-strings</a></li>
+          <li><a href="#ch10-regex">Regex</a></li>
+          <li><a href="#ch10-encoding">Encoding / decoding</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch11"><span class="ch-num">11</span> Collections</a>
+        <ul class="sub">
+          <li><a href="#ch11-core">list, tuple, dict, set</a></li>
+          <li><a href="#ch11-deque">deque</a></li>
+          <li><a href="#ch11-counter">Counter</a></li>
+          <li><a href="#ch11-defaultdict">defaultdict</a></li>
+          <li><a href="#ch11-ordereddict">OrderedDict</a></li>
+          <li><a href="#ch11-heapq">heapq</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch12"><span class="ch-num">12</span> Operators</a>
+        <ul class="sub">
+          <li><a href="#ch12-arithmetic">Arithmetic</a></li>
+          <li><a href="#ch12-logical">Logical</a></li>
+          <li><a href="#ch12-bitwise">Bitwise</a></li>
+          <li><a href="#ch12-identity">Identity &amp; membership</a></li>
+          <li><a href="#ch12-chained">Chained comparisons</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch13"><span class="ch-num">13</span> Control Flow</a>
+        <ul class="sub">
+          <li><a href="#ch13-if">if / elif / else</a></li>
+          <li><a href="#ch13-match">match-case</a></li>
+          <li><a href="#ch13-loops">Loops</a></li>
+          <li><a href="#ch13-breakcontinue">break &amp; continue</a></li>
+          <li><a href="#ch13-elseloops">else on loops</a></li>
+          <li><a href="#ch13-pass">pass</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">
+      06 chapters · language mechanics<br>
+      builds on Part I's runtime model
+    </div>
+  </aside>
+
+  <main>
+    <div class="content">
+
+      <header class="doc-header">
+        <div class="eyebrow">Python Internals — Study Notes</div>
+        <h1>Part II: Core Python Language</h1>
+        <p class="lede">The building blocks you use in every single Python program — assignment and unpacking, the full type system with its real memory costs, strings and text encoding, the collections that do the heavy lifting, and the control-flow constructs that shape execution.</p>
+        <div class="goal-box">
+          <b>Goal of this part</b>
+          Move from "I know the syntax" to "I know what each construct actually costs and why it behaves the way it does" — for every core data type, know its internal representation, its time complexity, and its sharpest gotchas, not just its API.
+        </div>
+      </header>
+
+      <section class="chapter" id="ch8">
+        <div class="chapter-kicker"><span class="num">CH. 08</span><span class="tag">Foundations</span></div>
+        <h2 class="chapter-title">Variables &amp; Assignment</h2>
+        <p>Part I, Chapter 4 established that assignment is always a <em class="term">binding</em>, never a copy. This chapter builds on that foundation to cover every shape assignment can take in Python — several of which don't exist in most other languages at all.</p>
+
+        <h3 id="ch8-multi">Multiple assignment</h3>
+        <p>Python allows one expression to be bound to several names in one statement, and several expressions to several names in one statement:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c"># Same object bound to three names</span>
+a = b = c = <span class="n">0</span>
+<span class="f">print</span>(a <span class="k">is</span> b <span class="k">is</span> c)   <span class="c"># True -- all three point at the SAME int object</span>
+
+<span class="c"># Different objects, one per name, evaluated left-to-right on the RHS first</span>
+x, y, z = <span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha with mutable objects</b>
+          <code>a = b = []</code> binds <em>both</em> names to the <strong>same single list</strong> — mutating through <code>a</code> is visible through <code>b</code>, because there was only ever one object created. This is a direct, and frequently-tripped-over, consequence of Chapter 4's binding model: the chained form only creates <em>one</em> object on the right, no matter how many names are chained.
+        </div>
+
+        <h3 id="ch8-tuple-unpack">Tuple unpacking</h3>
+        <p>Python evaluates the right-hand side into a sequence first, then unpacks it positionally into the names on the left — this works for any <strong>iterable</strong>, not literally just tuples, and the parentheses around a tuple are optional in most positions:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>point = (<span class="n">3</span>, <span class="n">4</span>)
+x, y = point            <span class="c"># x=3, y=4</span>
+
+<span class="c"># Works on any iterable, including generators and strings</span>
+a, b, c = <span class="s">"xyz"</span>          <span class="c"># a='x', b='y', c='z'</span>
+first, second = [<span class="n">10</span>, <span class="n">20</span>]
+
+<span class="c"># The count must match exactly, or ValueError is raised</span>
+a, b = (<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>)         <span class="c"># ValueError: too many values to unpack</span></pre>
+        </div>
+        <p>This is also how <code>for</code> loops destructure pairs, which is why <code>for k, v in mydict.items():</code> reads naturally — each iteration produces a 2-tuple, unpacked directly into <code>k</code> and <code>v</code>.</p>
+
+        <h3 id="ch8-extended">Extended (starred) unpacking</h3>
+        <p><strong>PEP 3132</strong> added a <code>*name</code> form that captures "everything else" as a list, letting you unpack sequences of unknown or variable length without slicing manually:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>first, *rest = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>]
+<span class="c"># first = 1, rest = [2, 3, 4]  -- rest is always a list, regardless of input type</span>
+
+*init, last = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>]
+<span class="c"># init = [1, 2, 3], last = 4</span>
+
+first, *middle, last = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>, <span class="n">5</span>]
+<span class="c"># first = 1, middle = [2, 3, 4], last = 5</span>
+
+<span class="c"># Only ONE starred name is allowed per unpacking -- the position is
+# unambiguous only if there's a single "everything else" collector.</span></pre>
+        </div>
+        <p>The same star syntax appears in function signatures (<code>def f(*args, **kwargs)</code>) and call sites (<code>f(*iterable)</code>) — all three uses share the same underlying idea of "spread or gather a variable number of items," but the assignment-target form above is specifically an unpacking pattern, distinct from the packing behavior in a function definition.</p>
+
+        <h3 id="ch8-swap">Swapping without a temp variable</h3>
+        <p>Python's tuple packing/unpacking combine to make variable swaps a one-liner, with no temporary variable required:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>a, b = <span class="n">1</span>, <span class="n">2</span>
+a, b = b, a
+<span class="f">print</span>(a, b)   <span class="c"># 2 1</span></pre>
+        </div>
+        <p>Mechanically, the right-hand side <code>b, a</code> is fully evaluated into a temporary tuple <strong>first</strong> — before any assignment on the left happens — and that tuple is then unpacked into <code>a, b</code>. This is why it's safe and correct even for arbitrarily long chains: <code>a, b, c = c, a, b</code> works for exactly the same reason, with no risk of reading a partially-updated value mid-swap.</p>
+
+        <h3 id="ch8-walrus">The walrus operator (<code>:=</code>)</h3>
+        <p><strong>PEP 572</strong> (Python 3.8) introduced the <strong>assignment expression</strong> — written <code>name := expr</code> — which does something ordinary <code>=</code> cannot: it assigns a value <em>and</em> produces that value as the result of an expression, so it can be used inside another expression (an <code>if</code> condition, a comprehension, a <code>while</code> condition) rather than only as a standalone statement.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c"># Before: compute twice, or compute-then-check in two statements</span>
+data = fetch()
+<span class="k">if</span> data <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+    process(data)
+
+<span class="c"># With walrus: compute and check in one expression, no repetition</span>
+<span class="k">if</span> (data := fetch()) <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+    process(data)
+
+<span class="c"># Very common in comprehensions -- avoids calling an expensive function twice</span>
+results = [y <span class="k">for</span> x <span class="k">in</span> data <span class="k">if</span> (y := expensive(x)) <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>]
+
+<span class="c"># Common in while loops reading a stream</span>
+<span class="k">while</span> (chunk := file.read(<span class="n">8192</span>)):
+    process(chunk)</pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha: not a statement</b>
+          <code>name := expr</code> must appear as part of a larger expression — bare <code>x := 5</code> as a standalone statement is a <code>SyntaxError</code> (use plain <code>x = 5</code> for that); and it must always be wrapped in parentheses when used as an <code>if</code>/<code>while</code> condition combined with other operators, to avoid ambiguity with normal <code>=</code>.
+        </div>
+
+        <h3 id="ch8-destructure">Destructuring, more broadly</h3>
+        <p>"Destructuring" is the general term for pulling a compound value apart into individual names in one step — Python supports it in more places than plain assignment:</p>
+        <div class="deflist">
+          <div class="item"><dt>Nested unpacking</dt><dd><code>(a, (b, c)) = (1, (2, 3))</code> — unpacking patterns can nest arbitrarily to match nested structure.</dd></div>
+          <div class="item"><dt>In <code>for</code> loops</dt><dd><code>for key, (x, y) in points.items():</code> — each iterated item is unpacked using the same rules as assignment.</dd></div>
+          <div class="item"><dt>In function parameters</dt><dd>Python 3 removed implicit tuple-parameter unpacking (it existed in Python 2), so destructuring in a signature must be done explicitly inside the function body today.</dd></div>
+          <div class="item"><dt>In <code>match</code> statements</dt><dd>Structural pattern matching (Chapter 13) is a considerably more powerful generalization of destructuring — it can match on type, structure, and value simultaneously, not just position.</dd></div>
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 8 — Key takeaways</div>
+          <ul>
+            <li>Chained assignment (<code>a = b = x</code>) binds every name to <strong>one shared object</strong> — dangerous with mutable objects, harmless with immutable ones.</li>
+            <li>Unpacking works on any iterable, evaluates the right-hand side fully before binding anything on the left, and requires an exact length match unless a starred target is present.</li>
+            <li>Swapping needs no temp variable because the RHS tuple is built completely before any target is assigned.</li>
+            <li>The walrus operator (<code>:=</code>) assigns <em>and</em> yields a value in one expression — useful for avoiding repeated computation inside conditions and comprehensions.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch9">
+        <div class="chapter-kicker"><span class="num">CH. 09</span><span class="tag">★ Type System</span></div>
+        <h2 class="chapter-title">Python Data Types</h2>
+        <p>This is the chapter that turns "I know how to use a list" into "I know what a list costs." For each type below you'll get five things: how CPython actually represents it in memory, the real time complexity of its common operations, its memory footprint, the operations you'll use daily, and the gotchas that trip up even experienced engineers.</p>
+
+        <div class="note insight">
+          <b class="label">Why immutable vs mutable is the first split that matters</b>
+          Every type in this chapter is either <strong>immutable</strong> (its value can never change after creation — any "modification" actually produces a brand-new object) or <strong>mutable</strong> (it can be changed in place, keeping the same identity). This single property determines whether a type can be a dict key or set member (immutability is required, because hash values must stay stable for an object's lifetime), whether it's safe to share across threads without locking, and whether passing it to a function risks the caller seeing changes.
+        </div>
+
+        <h3 id="ch9-immutable">Immutable types</h3>
+        <p>Immutable objects can be freely shared — by multiple names, across threads, as dict keys — because nothing can ever change their value out from under a holder. CPython exploits this aggressively for caching and interning, which shows up repeatedly below.</p>
+
+        <div class="type-card" id="type-int">
+          <div class="tc-head"><div class="tc-name"><code>int</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>CPython integers are <strong>arbitrary-precision</strong> — there's no 32/64-bit overflow, ever. A <code>PyLongObject</code> stores a sign and an array of "digits" in base 2³⁰ (on most 64-bit builds), so a huge integer is really a little array, much like manual long-arithmetic on paper but in base ~1 billion instead of base 10.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Add / subtract / compare</td><td><code>O(n)</code> in digit count — <code>O(1)</code> for typical small ints</td></tr>
+              <tr><td>Multiply</td><td><code>O(n·m)</code> naively; CPython uses Karatsuba for very large operands</td></tr>
+              <tr><td>Division / modulo</td><td><code>O(n²)</code>-ish for big numbers; effectively <code>O(1)</code> for machine-word-sized ints</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>Header (refcount + type pointer) + size/sign field + inline digit array. A small int on a typical 64-bit build costs around 28 bytes regardless of "smallness" — there's no packed unboxed form. <strong>CPython pre-allocates and caches every integer from -5 to 256</strong> as a permanent singleton, so small-int arithmetic in a hot loop reuses existing objects instead of allocating.</p>
+            <h5>Common operations</h5>
+            <ul><li><code>+ - * // % **</code>, bitwise <code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code></li><li><code>int(x)</code>, <code>x.bit_length()</code>, <code>x.to_bytes()</code> / <code>int.from_bytes()</code></li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b><code>a = 200; b = 200; a is b</code> is unreliable — <code>True</code> at the REPL for the -5..256 cache range, but not guaranteed across all contexts, and definitely <code>False</code> for larger numbers each created independently. Never use <code>is</code> for integer value comparison — always <code>==</code>. Also: <code>/</code> always produces a <code>float</code> (true division); use <code>//</code> for integer floor division.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-float">
+          <div class="tc-head"><div class="tc-name"><code>float</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>A thin wrapper around a native C <code>double</code> — <strong>IEEE 754 binary64</strong>. Unlike <code>int</code>, there is no arbitrary-precision fallback; a float has a fixed 53 bits of mantissa precision regardless of how it's written in source.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Arithmetic, comparison</td><td><code>O(1)</code> — a single hardware FPU instruction</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>Header + one 8-byte double ≈ 24 bytes total. No small-value caching like <code>int</code> — every float literal generally produces its own object (CPython does maintain an internal free list to speed up allocation/deallocation churn, but that's a performance detail, not an identity guarantee).</p>
+            <h5>Common operations</h5>
+            <ul><li><code>+ - * / // % **</code>, <code>round(x, n)</code>, <code>math</code> module functions</li><li><code>x.is_integer()</code>, <code>float('inf')</code>, <code>float('nan')</code></li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b><code>0.1 + 0.2 == 0.3</code> is <code>False</code> — binary floating point cannot represent most decimal fractions exactly, so tiny representation errors accumulate. Compare floats with a tolerance (<code>math.isclose()</code>), never <code>==</code>. Also: <code>float('nan') == float('nan')</code> is <code>False</code> by IEEE 754 definition — NaN is never equal to anything, including itself.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-bool">
+          <div class="tc-head"><div class="tc-name"><code>bool</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p><code>bool</code> is a <strong>subclass of <code>int</code></strong> — not a distinct primitive at all. There are exactly <strong>two <code>bool</code> instances ever</strong>, <code>True</code> and <code>False</code>, permanent singletons living at fixed addresses for the life of the process.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr><tr><td>Everything</td><td><code>O(1)</code> — same as int, since it <em>is</em> int under the hood</td></tr></table>
+            <h5>Memory layout</h5>
+            <p>Identical struct layout to <code>int</code>; <code>True</code> stores the value 1, <code>False</code> stores 0. No extra allocation ever happens for a boolean — every <code>True</code> anywhere in your program is the exact same object.</p>
+            <h5>Common operations</h5>
+            <ul><li><code>and or not</code>, comparisons that naturally produce a bool</li><li><code>bool(x)</code> — truthiness coercion via <code>__bool__</code>/<code>__len__</code></li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b><code>True + True == 2</code> and <code>isinstance(True, int)</code> is <code>True</code> — because bool really is int. This lets <code>sum(bool_list)</code> count <code>True</code> values, a common (and legitimate) idiom, but it also means <code>{True: 'a', 1: 'b'}</code> is a <strong>one-entry dict</strong> — <code>True</code> and <code>1</code> hash identically and compare equal, so the second assignment overwrites the first.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-complex">
+          <div class="tc-head"><div class="tc-name"><code>complex</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>A <code>PyComplexObject</code> holding exactly two C <code>double</code>s — real and imaginary parts. No arbitrary precision, same IEEE 754 caveats as <code>float</code> apply to each component independently.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr><tr><td>Arithmetic</td><td><code>O(1)</code> — a handful of float ops per operation</td></tr></table>
+            <h5>Memory layout</h5>
+            <p>Header + two 8-byte doubles ≈ 32 bytes.</p>
+            <h5>Common operations</h5>
+            <ul><li>Literal suffix <code>j</code>: <code>3 + 4j</code></li><li><code>.real</code>, <code>.imag</code>, <code>abs()</code> for magnitude, <code>cmath</code> module for complex-aware <code>sqrt</code>, <code>exp</code>, etc.</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>Complex numbers have <strong>no ordering</strong> — <code>1+2j &lt; 3+4j</code> raises <code>TypeError</code>, since "less than" isn't mathematically well-defined on the complex plane. Rare in general application code; common in scientific/DSP work.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-str">
+          <div class="tc-head"><div class="tc-name"><code>str</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>Since <strong>PEP 393</strong> (Python 3.3+), CPython uses a <strong>"flexible string representation"</strong>: each string is stored internally using the <em>smallest fixed-width encoding</em> that can hold its widest character — 1 byte/char (Latin-1) if every character fits in 0–255, 2 bytes/char (UCS-2) if the widest character needs up to 0xFFFF, or 4 bytes/char (UCS-4) if any character is outside the Basic Multilingual Plane (e.g. many emoji). This is decided once, at creation, per string.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Indexing <code>s[i]</code></td><td><code>O(1)</code> — fixed-width internal storage makes this true random access</td></tr>
+              <tr><td>Slicing</td><td><code>O(k)</code> for slice length <code>k</code> — copies</td></tr>
+              <tr><td>Concatenation <code>s1 + s2</code></td><td><code>O(n+m)</code> — always builds a new string</td></tr>
+              <tr><td><code>in</code> substring search</td><td><code>O(n·m)</code> worst case (CPython uses a Boyer-Moore-ish algorithm in practice)</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>Header + length + a cached hash value (computed once, reused forever — this is why strings make fast dict keys) + the inline character buffer at whichever width PEP 393 selected.</p>
+            <h5>Common operations</h5>
+            <ul><li>Full method set: <code>.split()</code>, <code>.join()</code>, <code>.replace()</code>, <code>.strip()</code>, <code>.format()</code>, f-strings (all covered in depth in Chapter 10)</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>Building a large string with repeated <code>s += chunk</code> in a loop is <strong><code>O(n²)</code></strong> overall — each <code>+=</code> allocates an entirely new string and copies everything so far, because strings are immutable. Use <code>"".join(chunks)</code> instead, which allocates the final buffer once.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-tuple">
+          <div class="tc-head"><div class="tc-name"><code>tuple</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>A fixed-size, contiguous C array of <code>PyObject*</code> pointers — essentially the simplest possible container. Size is fixed permanently at creation; there is no over-allocation because a tuple, unlike a list, never needs to grow.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Indexing</td><td><code>O(1)</code></td></tr>
+              <tr><td>Concatenation</td><td><code>O(n+m)</code> — builds a new tuple</td></tr>
+              <tr><td><code>in</code></td><td><code>O(n)</code> — linear scan</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>Header + length + a tightly-packed pointer array with zero spare capacity — the most memory-efficient general container CPython has. The empty tuple <code>()</code> is a cached singleton.</p>
+            <h5>Common operations</h5>
+            <ul><li>Packing/unpacking (Chapter 8), used as dict keys and set members when all elements are hashable</li><li><code>collections.namedtuple</code> / <code>typing.NamedTuple</code> for field-named tuples</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>Immutability is <strong>shallow</strong>: <code>t = ([1,2], 3)</code> — you can never make <code>t</code> point at a different list, but <code>t[0].append(4)</code> works fine, because the list itself is still mutable. A tuple containing a mutable element is also <strong>unhashable</strong>, so it can't be used as a dict key. And don't forget the trailing comma for a one-element tuple: <code>(1,)</code>, not <code>(1)</code> (which is just the int 1 in parentheses).</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-bytes">
+          <div class="tc-head"><div class="tc-name"><code>bytes</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>A fixed-length, immutable array of raw byte values (each 0–255) — structurally similar to the old pre-PEP-393 string representation, but explicitly for binary data with no encoding interpretation attached.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr><tr><td>Indexing, slicing, concatenation</td><td>Same profile as <code>str</code> — <code>O(1)</code>, <code>O(k)</code>, <code>O(n+m)</code> respectively</td></tr></table>
+            <h5>Memory layout</h5>
+            <p>Header + length + inline byte buffer, exactly 1 byte per element — no width selection needed since there's no character concept, only raw values.</p>
+            <h5>Common operations</h5>
+            <ul><li><code>.decode(encoding)</code> → <code>str</code>; <code>str.encode(encoding)</code> → <code>bytes</code> (Chapter 10)</li><li><code>.hex()</code>, <code>bytes.fromhex()</code>, slicing, used throughout networking and file I/O in binary mode</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>Indexing a <code>bytes</code> object returns an <strong><code>int</code></strong>, not a length-1 <code>bytes</code>: <code>b'abc'[0]</code> is <code>97</code>, not <code>b'a'</code> (slicing, <code>b'abc'[0:1]</code>, does return <code>bytes</code>). Also: <code>bytes</code> and <code>str</code> are never automatically compatible — concatenating or comparing them across types raises <code>TypeError</code>, forcing explicit encode/decode at the boundary.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-frozenset">
+          <div class="tc-head"><div class="tc-name"><code>frozenset</code></div><span class="tc-badge immutable">immutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>The immutable counterpart to <code>set</code> — same open-addressing hash table internals under the hood, just with the "add/remove" operations removed from its API and, crucially, with a working <code>__hash__</code> restored (regular <code>set</code> deliberately has none).</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Membership (<code>in</code>)</td><td><code>O(1)</code> average</td></tr>
+              <tr><td>Union / intersection / difference</td><td><code>O(len(smaller set))</code> roughly</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>A sparse hash table sized to keep the load factor low (typically resized to stay below ~⅔ full), trading memory for fast average-case lookups — same strategy as <code>set</code>, covered in more depth there.</p>
+            <h5>Common operations</h5>
+            <ul><li><code>| &amp; - ^</code> for union/intersection/difference/symmetric-difference</li><li>Using a <code>frozenset</code> as a dict key or as an element of another set — impossible with a plain <code>set</code></li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>There is <strong>no literal syntax</strong> for <code>frozenset</code> — unlike <code>set</code>'s <code>{1, 2, 3}</code>, you must always call <code>frozenset(...)</code> explicitly. And every element inside it must itself be hashable, for the same reason tuple elements must be for the tuple to be hashable.</div>
+          </div>
+        </div>
+
+        <h3 id="ch9-mutable">Mutable types</h3>
+        <p>Mutable objects can change value in place while keeping the same identity — efficient for building up and modifying data, but unsafe as dict keys (a changing hash would corrupt the hash table) and something to watch for whenever an object is shared across names, function calls, or threads.</p>
+
+        <div class="type-card" id="type-list">
+          <div class="tc-head"><div class="tc-name"><code>list</code></div><span class="tc-badge mutable">mutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>A dynamic array of <code>PyObject*</code> pointers — conceptually identical to a C++ <code>std::vector&lt;void*&gt;</code>. CPython <strong>over-allocates</strong> the backing array beyond the current element count, so repeated appends don't need to reallocate every single time.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Index / index-assign</td><td><code>O(1)</code></td></tr>
+              <tr><td><code>.append(x)</code></td><td><strong>Amortized</strong> <code>O(1)</code> — occasional <code>O(n)</code> reallocation, averaged out</td></tr>
+              <tr><td><code>.insert(0, x)</code> / <code>.pop(0)</code></td><td><code>O(n)</code> — every later element must shift</td></tr>
+              <tr><td><code>.pop()</code> (from end)</td><td><code>O(1)</code></td></tr>
+              <tr><td><code>in</code>, linear search</td><td><code>O(n)</code></td></tr>
+              <tr><td><code>.sort()</code></td><td><code>O(n log n)</code> — Timsort, stable</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>Header + a used-length field + an allocated-capacity field + the pointer array itself. Growth roughly follows a ~1.125× pattern (plus a small constant) rather than doubling, tuned empirically by the CPython team to balance wasted memory against reallocation frequency.</p>
+            <h5>Common operations</h5>
+            <ul><li><code>.append()</code>, <code>.extend()</code>, <code>.insert()</code>, <code>.remove()</code>, <code>.pop()</code>, slicing, list comprehensions</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>The classic <strong>mutable default argument</strong> bug: <code>def f(x=[]):</code> — the list is created <em>once</em>, when the function is defined, and reused across <em>every</em> call that doesn't pass its own <code>x</code>, so appends accumulate silently across unrelated calls. Always default to <code>None</code> and create the list inside the function body instead. Also: <code>new = old</code> aliases the same list (Chapter 4); use <code>old.copy()</code> or <code>old[:]</code> for an independent shallow copy.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-dict">
+          <div class="tc-head"><div class="tc-name"><code>dict</code></div><span class="tc-badge mutable">mutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>A hash table — but since Python 3.6/3.7 (a de facto implementation detail promoted to a language guarantee in 3.7), CPython uses a <strong>"compact dict"</strong> design with two arrays instead of one: a sparse array of small integer indices (the actual hash table), and a dense array holding the real entries (hash, key, value) in <strong>insertion order</strong>. Lookups hash the key, probe the sparse index array to find which slot in the dense array holds it, then read that slot directly — this design is also why iteration order now reliably matches insertion order, essentially for free.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Get / set / delete by key</td><td>Average <code>O(1)</code>; worst case <code>O(n)</code> under heavy hash collisions</td></tr>
+              <tr><td>Iteration</td><td><code>O(n)</code>, in insertion order</td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>The sparse index array is sized as a power of two and kept well below full to minimize probing; the dense entry array grows similarly to a list's backing array. The compact design specifically <strong>saved significant memory</strong> versus the pre-3.6 layout, since the sparse table now stores small indices instead of full hash/key/value triples per slot.</p>
+            <h5>Common operations</h5>
+            <ul><li><code>d[key]</code>, <code>.get()</code>, <code>.setdefault()</code>, <code>.update()</code>, <code>.pop()</code>, dict comprehensions</li><li><code>.keys()</code>/<code>.values()</code>/<code>.items()</code> return live, dynamic <strong>views</strong> — not copies — that reflect later mutations to the dict</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>Mutating a dict's size (adding/removing keys) <strong>while iterating over it directly</strong> raises <code>RuntimeError: dictionary changed size during iteration</code> — iterate over <code>list(d.items())</code> if you need to mutate during the loop. Also: keys must be hashable, which is exactly why the immutable types above make good keys and plain <code>list</code>/<code>dict</code>/<code>set</code> don't.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-set">
+          <div class="tc-head"><div class="tc-name"><code>set</code></div><span class="tc-badge mutable">mutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>An open-addressing hash table storing keys only (no associated values) — structurally close to a dict with every value discarded. Unlike <code>dict</code>, <code>set</code> has <strong>no guaranteed iteration order</strong> — it never adopted the compact/ordered redesign, since ordering isn't part of a set's contract.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Add / remove / membership</td><td>Average <code>O(1)</code></td></tr>
+              <tr><td>Union / intersection / difference</td><td>Roughly <code>O(len(smaller set))</code></td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>A single sparse hash table array, resized to stay under a target load factor (similar threshold logic to dict, without the second dense array since there's no associated value to keep contiguous).</p>
+            <h5>Common operations</h5>
+            <ul><li><code>.add()</code>, <code>.remove()</code> (raises <code>KeyError</code> if absent), <code>.discard()</code> (silent if absent), <code>.union()</code>/<code>|</code>, <code>.intersection()</code>/<code>&amp;</code>, set comprehensions</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b>Iteration order can <em>look</em> stable for small integer sets (because small ints hash to themselves, producing predictable slot placement) — this is a coincidence of the hash function, not a guarantee, and relying on it is fragile the moment other types or larger numbers are involved. Elements must be hashable, exactly as with dict keys.</div>
+          </div>
+        </div>
+
+        <div class="type-card" id="type-bytearray">
+          <div class="tc-head"><div class="tc-name"><code>bytearray</code></div><span class="tc-badge mutable">mutable</span></div>
+          <div class="tc-body">
+            <h5>Internal representation</h5>
+            <p>The mutable counterpart to <code>bytes</code> — a resizable buffer of raw byte values, using the same dynamic-array-with-over-allocation growth strategy as <code>list</code>, just specialized to store 1-byte values densely instead of full pointers.</p>
+            <h5>Time complexity</h5>
+            <table><tr><th>Operation</th><th>Complexity</th></tr>
+              <tr><td>Indexing, index-assign</td><td><code>O(1)</code></td></tr>
+              <tr><td><code>.append()</code></td><td>Amortized <code>O(1)</code></td></tr>
+              <tr><td><code>.insert()</code> at arbitrary position</td><td><code>O(n)</code></td></tr>
+            </table>
+            <h5>Memory layout</h5>
+            <p>Header + used length + allocated capacity + an inline byte buffer — the same shape as <code>list</code>'s layout, just one byte per element instead of one pointer (8 bytes) per element, making it dramatically more memory-efficient for large binary buffers than a <code>list</code> of small ints would be.</p>
+            <h5>Common operations</h5>
+            <ul><li>In-place item assignment (<code>ba[0] = 65</code>), <code>.append()</code>, <code>.extend()</code>, slicing</li><li><code>.decode()</code> to get a <code>str</code>; useful for incrementally building binary data without the <code>O(n²)</code> cost that repeated <code>bytes</code> concatenation would incur</li></ul>
+            <div class="tc-gotcha"><b>Gotcha</b><code>bytearray</code> is <strong>unhashable</strong> (like all mutable types) — it can never be a dict key or set member, even though its immutable sibling <code>bytes</code> can. Indexing returns an <code>int</code>, same as <code>bytes</code>.</div>
+          </div>
+        </div>
+
+        <div class="note">
+          <b class="label">The pattern underneath all twelve</b>
+          Every type in this chapter reduces to one of exactly two storage strategies: a <strong>contiguous array</strong> (int's digits, str's char buffer, tuple/list/bytes/bytearray's element arrays) or a <strong>hash table</strong> (dict, set, frozenset). Complexity and memory behavior throughout this document — and throughout real Python performance work — almost always traces back to which of these two shapes a given type uses, and whether that structure is fixed-size (immutable) or growable (mutable).
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 9 — Key takeaways</div>
+          <ul>
+            <li><strong>Immutability enables hashability</strong> — it's the reason <code>str</code>, <code>tuple</code>, and <code>frozenset</code> can be dict keys and <code>list</code>, <code>dict</code>, and <code>set</code> cannot.</li>
+            <li><strong>Array-backed types</strong> (<code>list</code>, <code>tuple</code>, <code>str</code>, <code>bytes</code>, <code>bytearray</code>) give <code>O(1)</code> indexing but <code>O(n)</code> insert/delete away from the end.</li>
+            <li><strong>Hash-table-backed types</strong> (<code>dict</code>, <code>set</code>, <code>frozenset</code>) give average <code>O(1)</code> membership and lookup at the cost of no meaningful ordering (set/frozenset) or extra bookkeeping to preserve it (dict).</li>
+            <li>CPython caches small ints (-5..256), interns some strings, and singleton-izes <code>True</code>/<code>False</code>/<code>()</code> — real optimizations, but never something correct code should depend on via <code>is</code>.</li>
+            <li>Repeated string concatenation and repeated list insertion-at-front are the two most common accidental <code>O(n²)</code> patterns in everyday Python code.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch10">
+        <div class="chapter-kicker"><span class="num">CH. 10</span><span class="tag">Text</span></div>
+        <h2 class="chapter-title">Strings</h2>
+        <p>Chapter 9 covered <code>str</code>'s internal representation. This chapter goes deeper into the text-handling machinery around it: how Unicode and UTF-8 relate, why interning exists, and the practical tools — slicing, formatting, regex, encoding — you'll use on strings constantly.</p>
+
+        <h3 id="ch10-unicode">Unicode</h3>
+        <p><strong>Unicode</strong> is a universal character standard that assigns every character in (essentially) every writing system a unique number, called a <strong>code point</strong>, written like <code>U+0041</code> (the letter "A") or <code>U+1F600</code> (😀). Since Python 3, <strong>every <code>str</code> is a sequence of Unicode code points</strong> — there is no separate "ASCII string" type; <code>str</code> always means Unicode text, full stop.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>s = <span class="s">"café"</span>
+<span class="f">len</span>(s)             <span class="c"># 4 -- counts CODE POINTS, not bytes</span>
+<span class="f">ord</span>(<span class="s">"é"</span>)          <span class="c"># 233 -- the code point number</span>
+<span class="f">chr</span>(<span class="n">233</span>)          <span class="c"># 'é' -- the inverse</span></pre>
+        </div>
+        <p>This is the crucial mental separation for this entire chapter: <strong>Unicode is about characters (code points)</strong>; <strong>encodings like UTF-8 are about how those code points are serialized as bytes</strong>. A Python <code>str</code> lives entirely in the first world — it has no "encoding" of its own while it exists as a <code>str</code> object in memory (Chapter 9's PEP 393 storage width is an internal implementation detail, invisible at the language level).</p>
+
+        <h3 id="ch10-utf8">UTF-8</h3>
+        <p><strong>UTF-8</strong> is the dominant <em class="term">encoding</em> — a specific, reversible rule for turning Unicode code points into a stream of bytes (and back). It is <strong>variable-width</strong>: ASCII characters (code points 0–127) take exactly 1 byte, and less common characters take 2, 3, or 4 bytes depending on their code point value. This is precisely why the world converged on UTF-8: it's fully backward-compatible with plain ASCII byte-for-byte, while still able to represent every Unicode character that exists.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>s = <span class="s">"café"</span>
+b = s.encode(<span class="s">"utf-8"</span>)
+b                       <span class="c"># b'caf\xc3\xa9'</span>
+<span class="f">len</span>(s), <span class="f">len</span>(b)          <span class="c"># 4, 5 -- 'é' is 1 code point but 2 UTF-8 bytes</span>
+
+b.decode(<span class="s">"utf-8"</span>)      <span class="c"># 'café' -- back to a str</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha: len() means different things for str vs bytes</b>
+          <code>len(a_str)</code> counts code points; <code>len(a_bytes)</code> counts bytes. They only match when every character happens to be ASCII. This distinction is precisely why <strong>string indexing is <code>O(1)</code></strong> (Chapter 9's fixed-width internal storage) while <strong>UTF-8 byte-offset indexing into arbitrary characters is not trivially <code>O(1)</code></strong> — you can't jump to "the 5th character" in a raw UTF-8 byte stream without scanning, because characters take a variable number of bytes.
+        </div>
+
+        <h3 id="ch10-interning">Interning</h3>
+        <p><strong>Interning</strong> is a memory/speed optimization where multiple, textually-identical strings share <strong>one single underlying object</strong> instead of each allocating separately — so comparing them can (in the interned case) be a fast identity check rather than a full character-by-character comparison, and memory isn't wasted on duplicates.</p>
+        <p>CPython automatically interns:</p>
+        <ul>
+          <li>All string literals that <em>look like</em> identifiers — letters, digits, underscores only (e.g. <code>"hello_world"</code>, but not <code>"hello world!"</code> with a space and punctuation).</li>
+          <li>Every attribute name, variable name, and keyword-argument name the compiler emits into bytecode (Chapter 3's <code>co_names</code>) — since these are looked up in namespace dicts constantly (Chapter 6), fast identity comparison for hash table lookups matters a great deal here.</li>
+        </ul>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>a = <span class="s">"hello"</span>
+b = <span class="s">"hello"</span>
+a <span class="k">is</span> b                     <span class="c"># True -- both interned, same object</span>
+
+c = <span class="s">"hello world!"</span>
+d = <span class="s">"hello world!"</span>
+c <span class="k">is</span> d                     <span class="c"># often False -- not identifier-shaped, not auto-interned</span>
+
+<span class="k">import</span> sys
+e = sys.intern(<span class="s">"hello world!"</span>)
+f = sys.intern(<span class="s">"hello world!"</span>)
+e <span class="k">is</span> f                     <span class="c"># True -- forced interning via sys.intern()</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha</b>
+          Interning is a <strong>CPython implementation detail</strong>, not a language guarantee — never write code whose correctness depends on <code>is</code> for string comparison; always use <code>==</code>. Interning is purely a performance optimization operating silently underneath equality comparison.
+        </div>
+
+        <h3 id="ch10-slicing">Slicing</h3>
+        <p>String slicing uses the same <code>[start:stop:step]</code> syntax as any sequence, always returning a <strong>new</strong> string (since strings are immutable, there's no in-place slice):</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>s = <span class="s">"Hello, World!"</span>
+s[:<span class="n">5</span>]         <span class="c"># 'Hello'</span>
+s[<span class="n">7</span>:]          <span class="c"># 'World!'</span>
+s[::-<span class="n">1</span>]        <span class="c"># '!dlroW ,olleH' -- negative step reverses</span>
+s[::<span class="n">2</span>]         <span class="c"># 'Hlo ol!' -- every 2nd character</span></pre>
+        </div>
+        <p>Slicing never raises an <code>IndexError</code> for out-of-range bounds (unlike single-index access) — it silently clamps to the string's actual length, which is convenient but can mask off-by-one bugs if you're not expecting that leniency.</p>
+
+        <h3 id="ch10-formatting">Formatting &amp; f-strings</h3>
+        <p>Python has accumulated three formatting mechanisms; understanding why f-strings won matters as much as the syntax itself:</p>
+        <table>
+          <tr><th>Style</th><th>Example</th><th>Notes</th></tr>
+          <tr><td><strong>%-formatting</strong></td><td><code>"%s is %d" % (name, age)</code></td><td>Oldest, C-<code>printf</code>-inspired; still seen in logging calls and older code</td></tr>
+          <tr><td><strong><code>str.format()</code></strong></td><td><code>"{} is {}".format(name, age)</code></td><td>More flexible (named/positional args, nested attribute access); more verbose</td></tr>
+          <tr><td><strong>f-strings</strong></td><td><code>f"{name} is {age}"</code></td><td>PEP 498 (3.6+); expressions evaluated inline; fastest of the three, because the compiler builds the concatenation logic directly into bytecode rather than parsing a format string at runtime</td></tr>
+        </table>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>name, age = <span class="s">"Ada"</span>, <span class="n">36</span>
+<span class="f">print</span>(f<span class="s">"{name} is {age} years old"</span>)
+<span class="f">print</span>(f<span class="s">"{age * 2 = }"</span>)             <span class="c"># self-documenting: prints "age * 2 = 72"</span>
+<span class="f">print</span>(f<span class="s">"{3.14159:.2f}"</span>)           <span class="c"># '3.14' -- format-spec after the colon</span>
+<span class="f">print</span>(f<span class="s">"{age:>6}"</span>)                <span class="c"># right-align in a width-6 field</span></pre>
+        </div>
+        <p>Crucially, an f-string is not a runtime-parsed template — the compiler (Chapter 2) parses the embedded expressions <strong>at compile time</strong> and emits ordinary bytecode to evaluate and concatenate them, which is exactly why f-strings can contain arbitrary Python expressions (function calls, arithmetic, even nested f-strings) and why they outperform the older two styles.</p>
+
+        <h3 id="ch10-regex">Regex</h3>
+        <p>The <code>re</code> module provides regular-expression matching — pattern-based text search, extraction, and substitution, built on its own internal (non-Python-bytecode) regex engine written in C.</p>
+        <div class="code-block">
+          <div class="code-head"><span>re_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> re
+
+pattern = re.compile(<span class="s">r"(\w+)@(\w+)\.com"</span>)   <span class="c"># raw string -- avoids escaping backslashes twice</span>
+
+m = pattern.search(<span class="s">"contact: ada@example.com"</span>)
+<span class="k">if</span> m:
+    m.group(<span class="n">0</span>)     <span class="c"># 'ada@example.com' -- full match</span>
+    m.group(<span class="n">1</span>)     <span class="c"># 'ada'              -- first capture group</span>
+
+re.sub(<span class="s">r"\d+"</span>, <span class="s">"#"</span>, <span class="s">"room 42, floor 7"</span>)   <span class="c"># 'room #, floor #'</span>
+re.findall(<span class="s">r"\d+"</span>, <span class="s">"room 42, floor 7"</span>)      <span class="c"># ['42', '7']</span></pre>
+        </div>
+        <div class="note insight">
+          <b class="label">Performance note</b>
+          <code>re.compile()</code> pre-parses a pattern into an internal matching program once; reusing a compiled pattern object across many calls is faster than passing the raw string to <code>re.search()</code> repeatedly (though the module keeps its own small internal cache of recently-used uncompiled patterns, which softens this in casual one-off use).
+        </div>
+
+        <h3 id="ch10-encoding">Encoding / decoding</h3>
+        <p>The full round trip, made explicit — this is the boundary every piece of text I/O (files, sockets, subprocess pipes) has to cross, since disks and networks only ever store and transmit raw bytes, never <code>str</code> objects directly:</p>
+        <div class="pipeline">
+          <div class="stage"><div class="k">str</div><div class="v">code points</div><div class="d">.encode()</div></div>
+          <div class="stage"><div class="k">bytes</div><div class="v">raw bytes</div><div class="d">e.g. UTF-8</div></div>
+          <div class="stage"><div class="k">disk / network</div><div class="v">stored</div><div class="d">bytes only</div></div>
+          <div class="stage"><div class="k">bytes</div><div class="v">raw bytes</div><div class="d">.decode()</div></div>
+          <div class="stage"><div class="k">str</div><div class="v">code points</div><div class="d">back in Python</div></div>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c"># Encoding can fail if the target encoding can't represent a character</span>
+<span class="s">"café"</span>.encode(<span class="s">"ascii"</span>)   <span class="c"># UnicodeEncodeError: 'ascii' codec can't encode 'é'</span>
+
+<span class="c"># Decoding can fail on malformed or mismatched byte sequences</span>
+<span class="k">b</span><span class="s">'\xc3\x28'</span>.decode(<span class="s">"utf-8"</span>)   <span class="c"># UnicodeDecodeError: invalid continuation byte</span>
+
+<span class="c"># errors= gives explicit control instead of raising</span>
+<span class="s">"café"</span>.encode(<span class="s">"ascii"</span>, errors=<span class="s">"ignore"</span>)     <span class="c"># b'caf'  -- drops the failing char</span>
+<span class="s">"café"</span>.encode(<span class="s">"ascii"</span>, errors=<span class="s">"replace"</span>)    <span class="c"># b'caf?' -- substitutes</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha</b>
+          Opening a file with <code>open(path)</code> uses a <strong>platform-dependent default encoding</strong> (often UTF-8 on Linux/macOS, but historically <code>cp1252</code>-family on Windows) unless you pass <code>encoding=</code> explicitly — this is a well-known source of "works on my machine" bugs when text files move between operating systems. Always pass <code>encoding="utf-8"</code> explicitly for reproducible behavior.
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 10 — Key takeaways</div>
+          <ul>
+            <li><strong>Unicode = characters (code points); an encoding like UTF-8 = bytes.</strong> A <code>str</code> lives in the first world; a <code>bytes</code> lives in the second — the boundary between them is always an explicit <code>.encode()</code>/<code>.decode()</code> call.</li>
+            <li>UTF-8 is variable-width, which is exactly why <code>len(str)</code> and <code>len(bytes)</code> diverge for non-ASCII text.</li>
+            <li>Interning lets identical identifier-like strings share one object — a real performance detail, never something to rely on with <code>is</code>.</li>
+            <li>F-strings are compiled directly into bytecode, making them both the most readable and the fastest of Python's three formatting styles.</li>
+            <li>Always pass <code>encoding=</code> explicitly when opening files — never rely on the platform default.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch11">
+        <div class="chapter-kicker"><span class="num">CH. 11</span><span class="tag">Containers</span></div>
+        <h2 class="chapter-title">Collections</h2>
+        <p>Chapter 9 covered the four built-in containers (<code>list</code>, <code>tuple</code>, <code>dict</code>, <code>set</code>) at the type-internals level. This chapter is about <em>choosing the right one</em> — including the specialized containers in the <code>collections</code> module and the <code>heapq</code> module, each of which exists to make one specific access pattern fast that the built-ins handle poorly.</p>
+
+        <h3 id="ch11-core">Quick recap: list, tuple, dict, set</h3>
+        <table>
+          <tr><th>Container</th><th>Ordered?</th><th>Mutable?</th><th>Best for</th></tr>
+          <tr><td><code>list</code></td><td>Yes</td><td>Yes</td><td>Sequential data, index access, appending</td></tr>
+          <tr><td><code>tuple</code></td><td>Yes</td><td>No</td><td>Fixed-shape records, dict keys, function returns</td></tr>
+          <tr><td><code>dict</code></td><td>Yes (insertion)</td><td>Yes</td><td>Key → value lookup</td></tr>
+          <tr><td><code>set</code></td><td>No</td><td>Yes</td><td>Membership tests, deduplication, set algebra</td></tr>
+        </table>
+        <p>Everything below extends this table with containers that specialize one of these trade-offs further.</p>
+
+        <h3 id="ch11-deque">deque</h3>
+        <p><code>collections.deque</code> ("deck") is a <strong>double-ended queue</strong>, implemented internally as a <strong>doubly-linked list of fixed-size blocks</strong> — not a single flat array like <code>list</code>. That structural choice is the whole point:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> collections <span class="k">import</span> deque
+
+dq = deque([<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>])
+dq.appendleft(<span class="n">0</span>)     <span class="c"># O(1) -- would be O(n) on a list!</span>
+dq.append(<span class="n">4</span>)         <span class="c"># O(1)</span>
+dq.popleft()          <span class="c"># O(1) -- would be O(n) on a list!</span>
+dq.pop()              <span class="c"># O(1)</span>
+
+<span class="c"># Bounded deque -- great for "last N items" tracking / sliding windows</span>
+recent = deque(maxlen=<span class="n">3</span>)
+<span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(<span class="n">5</span>): recent.append(i)
+<span class="f">list</span>(recent)          <span class="c"># [2, 3, 4] -- oldest items silently evicted</span></pre>
+        </div>
+        <p>The trade-off: unlike <code>list</code>, <strong>random access by index is <code>O(n)</code></strong> on a deque (it has to walk the linked blocks), not <code>O(1)</code>. Use <code>deque</code> when you're pushing/popping from <em>either end</em> repeatedly (queues, sliding windows, BFS frontiers); stick with <code>list</code> when you need index-heavy access.</p>
+
+        <h3 id="ch11-counter">Counter</h3>
+        <p><code>collections.Counter</code> is a <code>dict</code> subclass specialized for counting hashable items — every value defaults to <code>0</code> for keys that haven't been seen yet, and it ships with counting-specific convenience methods:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> collections <span class="k">import</span> Counter
+
+words = <span class="s">"the quick brown fox the lazy the dog"</span>.split()
+counts = Counter(words)
+counts               <span class="c"># Counter({'the': 3, 'quick': 1, 'brown': 1, ...})</span>
+
+counts[<span class="s">"the"</span>]        <span class="c"># 3</span>
+counts[<span class="s">"nonexistent"</span>]  <span class="c"># 0 -- no KeyError, unlike a plain dict</span>
+
+counts.most_common(<span class="n">2</span>)   <span class="c"># [('the', 3), ('quick', 1)] -- top-N by count</span></pre>
+        </div>
+        <p>Internally it's just a <code>dict</code> with an overridden <code>__missing__</code> hook (returns 0 instead of raising) plus extra methods — no exotic new data structure, just a well-chosen specialization.</p>
+
+        <h3 id="ch11-defaultdict">defaultdict</h3>
+        <p><code>collections.defaultdict</code> generalizes the same "no <code>KeyError</code> on missing keys" idea to <em>any</em> default value, by taking a zero-argument <strong>factory function</strong> called automatically the first time a missing key is accessed:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> collections <span class="k">import</span> defaultdict
+
+<span class="c"># Grouping pattern -- extremely common real-world use</span>
+groups = defaultdict(<span class="f">list</span>)
+<span class="k">for</span> name <span class="k">in</span> [<span class="s">"Ann"</span>, <span class="s">"Bob"</span>, <span class="s">"Al"</span>, <span class="s">"Bea"</span>]:
+    groups[name[<span class="n">0</span>]].append(name)   <span class="c"># no need to check "is this key here yet?"</span>
+
+<span class="f">dict</span>(groups)          <span class="c"># {'A': ['Ann', 'Al'], 'B': ['Bob', 'Bea']}</span></pre>
+        </div>
+        <p>Without <code>defaultdict</code>, the loop body would need <code>if name[0] not in groups: groups[name[0]] = []</code> before appending — <code>defaultdict</code> removes that boilerplate entirely by calling the factory (<code>list</code>, <code>int</code>, <code>set</code>, or any zero-arg callable) automatically on first access.</p>
+
+        <h3 id="ch11-ordereddict">OrderedDict</h3>
+        <p><code>collections.OrderedDict</code> predates Python 3.7's guarantee that plain <code>dict</code> preserves insertion order — so today, for <em>plain</em> ordering, a regular <code>dict</code> is sufficient and preferred. <code>OrderedDict</code> still earns its place for a few specific capabilities plain <code>dict</code> doesn't have:</p>
+        <ul>
+          <li><code>.move_to_end(key, last=True/False)</code> — reposition an existing key to either end in <code>O(1)</code>, the building block for LRU-cache implementations.</li>
+          <li>Equality comparison is <strong>order-sensitive</strong>: two <code>OrderedDict</code>s with the same items in different orders compare <em>unequal</em>; two plain <code>dict</code>s with the same items always compare equal regardless of order.</li>
+          <li>Signals <em>intent</em> in an API — makes "this order matters and is part of the contract" explicit and self-documenting, versus a plain dict's order being an implementation nicety.</li>
+        </ul>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">from</span> collections <span class="k">import</span> OrderedDict
+
+od = OrderedDict(a=<span class="n">1</span>, b=<span class="n">2</span>, c=<span class="n">3</span>)
+od.move_to_end(<span class="s">"a"</span>)
+<span class="f">list</span>(od)     <span class="c"># ['b', 'c', 'a']</span></pre>
+        </div>
+
+        <h3 id="ch11-heapq">heapq</h3>
+        <p><code>heapq</code> is not a container type at all — it's a module of functions that turn a plain <strong><code>list</code> into a binary min-heap in place</strong>, giving <code>O(log n)</code> insertion and <code>O(log n)</code> removal-of-smallest, with the smallest element always sitting at index <code>0</code>. This is the standard tool for priority queues, "top-K," and merge-style algorithms.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> heapq
+
+nums = [<span class="n">5</span>, <span class="n">1</span>, <span class="n">8</span>, <span class="n">2</span>, <span class="n">9</span>]
+heapq.heapify(nums)          <span class="c"># O(n) -- reorders the list in place into heap order</span>
+nums[<span class="n">0</span>]                     <span class="c"># 1 -- smallest element, always at the root</span>
+
+heapq.heappush(nums, <span class="n">0</span>)     <span class="c"># O(log n)</span>
+heapq.heappop(nums)          <span class="c"># O(log n) -- removes and returns the smallest</span>
+
+heapq.nsmallest(<span class="n">3</span>, nums)   <span class="c"># the 3 smallest, without fully sorting</span></pre>
+        </div>
+        <table>
+          <tr><th>Operation</th><th>Complexity</th></tr>
+          <tr><td><code>heapify()</code></td><td><code>O(n)</code></td></tr>
+          <tr><td><code>heappush()</code> / <code>heappop()</code></td><td><code>O(log n)</code> each</td></tr>
+          <tr><td>Peek smallest (<code>heap[0]</code>)</td><td><code>O(1)</code></td></tr>
+        </table>
+        <div class="note warn">
+          <b class="label">Gotcha</b>
+          <code>heapq</code> only provides a <strong>min-heap</strong> — for a max-heap, the standard trick is negating values on push and pop (<code>heappush(h, -x)</code>), or wrapping items in a tuple with a negated priority field, since there's no built-in max-heap variant.
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 11 — Key takeaways</div>
+          <ul>
+            <li><strong><code>deque</code></strong> trades away <code>O(1)</code> random indexing for <code>O(1)</code> operations at <em>both</em> ends — the right choice for queues and sliding windows.</li>
+            <li><strong><code>Counter</code></strong> and <strong><code>defaultdict</code></strong> both eliminate "check if key exists first" boilerplate; <code>Counter</code> specializes further with counting-specific methods like <code>.most_common()</code>.</li>
+            <li><strong><code>OrderedDict</code></strong> is mostly legacy now that plain <code>dict</code> preserves order, but still earns its keep for <code>.move_to_end()</code> and order-sensitive equality.</li>
+            <li><strong><code>heapq</code></strong> turns a plain list into an <code>O(log n)</code>-insert, <code>O(log n)</code>-pop-minimum priority queue in place — no dedicated heap type needed.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch12">
+        <div class="chapter-kicker"><span class="num">CH. 12</span><span class="tag">Expressions</span></div>
+        <h2 class="chapter-title">Operators</h2>
+        <p>Every operator in Python is, under the hood, a call to a <strong>dunder method</strong> on an object — <code>a + b</code> is really <code>a.__add__(b)</code> (with a fallback to <code>b.__radd__(a)</code> if the first returns <code>NotImplemented</code>). This chapter groups operators by category and flags the behaviors that differ from most C-family languages.</p>
+
+        <h3 id="ch12-arithmetic">Arithmetic operators</h3>
+        <table>
+          <tr><th>Operator</th><th>Meaning</th><th>Dunder</th></tr>
+          <tr><td><code>+ - * /</code></td><td>Add, subtract, multiply, true divide</td><td><code>__add__</code>, <code>__sub__</code>, <code>__mul__</code>, <code>__truediv__</code></td></tr>
+          <tr><td><code>//</code></td><td>Floor division (rounds toward negative infinity, <em>not</em> toward zero)</td><td><code>__floordiv__</code></td></tr>
+          <tr><td><code>%</code></td><td>Modulo — result takes the sign of the <em>divisor</em>, unlike C</td><td><code>__mod__</code></td></tr>
+          <tr><td><code>**</code></td><td>Exponentiation</td><td><code>__pow__</code></td></tr>
+        </table>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>-<span class="n">7</span> // <span class="n">2</span>     <span class="c"># -4, not -3 -- floors toward negative infinity</span>
+-<span class="n">7</span> % <span class="n">2</span>      <span class="c"># 1, not -1  -- result matches the sign of the divisor (2)</span>
+<span class="n">7</span> / <span class="n">2</span>       <span class="c"># 3.5 -- / is ALWAYS true division, even for two ints</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha for C/Java/JS engineers</b>
+          Python's <code>%</code> is <strong>not</strong> C-style truncated remainder — it's true mathematical modulo, so negative operands behave differently than most C-family languages. This is deliberate and consistent with <code>//</code> flooring the same direction.
+        </div>
+
+        <h3 id="ch12-logical">Logical operators</h3>
+        <p><code>and</code>, <code>or</code>, and <code>not</code> — but unlike C-family <code>&amp;&amp;</code>/<code>||</code>, Python's <code>and</code>/<code>or</code> don't return <code>True</code>/<code>False</code>; they return <strong>one of the actual operands</strong>, using short-circuit evaluation:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="n">0</span> <span class="k">or</span> <span class="s">"default"</span>     <span class="c"># 'default' -- 0 is falsy, so the SECOND operand is returned</span>
+<span class="s">"hi"</span> <span class="k">or</span> <span class="s">"default"</span>  <span class="c"># 'hi' -- first operand is truthy, returned as-is, second never evaluated</span>
+[] <span class="k">and</span> <span class="f">expensive</span>()  <span class="c"># [] -- short-circuits; expensive() is never called</span></pre>
+        </div>
+        <p>This return-the-operand behavior is exactly what powers the common <code>value = user_input or "default"</code> idiom, and why <code>and</code>/<code>or</code> chains are sometimes used as compact conditional expressions (though the explicit <code>x if cond else y</code> ternary is usually clearer).</p>
+
+        <h3 id="ch12-bitwise">Bitwise operators</h3>
+        <table>
+          <tr><th>Operator</th><th>Meaning</th></tr>
+          <tr><td><code>&amp;</code></td><td>Bitwise AND</td></tr>
+          <tr><td><code>|</code></td><td>Bitwise OR</td></tr>
+          <tr><td><code>^</code></td><td>Bitwise XOR</td></tr>
+          <tr><td><code>~</code></td><td>Bitwise NOT (inverts all bits — for an int <code>x</code>, equals <code>-x - 1</code>, due to two's-complement semantics on Python's conceptually infinite-width integers)</td></tr>
+          <tr><td><code>&lt;&lt; &gt;&gt;</code></td><td>Left/right shift</td></tr>
+        </table>
+        <p>Because <code>int</code> is arbitrary-precision (Chapter 9), bitwise operations conceptually operate on an infinite sign-extended bit pattern rather than a fixed 32/64-bit register — <code>~5</code> is <code>-6</code>, not a wrapped-around large positive number the way it might be in a fixed-width language.</p>
+        <div class="note">
+          <b class="label">Not just for ints</b>
+          <code>set</code> overloads <code>&amp; | ^ -</code> for intersection/union/symmetric-difference/difference (Chapter 9) — the same symbols, deliberately chosen for the mathematical parallel to set algebra, dispatched via the same dunder-method mechanism as arithmetic.
+        </div>
+
+        <h3 id="ch12-identity">Identity &amp; membership operators</h3>
+        <table>
+          <tr><th>Operator</th><th>Meaning</th><th>Complexity</th></tr>
+          <tr><td><code>is</code> / <code>is not</code></td><td>Same object? (Chapter 4) — never overridable</td><td><code>O(1)</code> — a single pointer comparison</td></tr>
+          <tr><td><code>in</code> / <code>not in</code></td><td>Membership test — calls <code>__contains__</code></td><td><code>O(n)</code> for list/tuple; average <code>O(1)</code> for dict/set/frozenset</td></tr>
+        </table>
+        <p>The complexity gap for <code>in</code> is one of the highest-leverage facts in this entire document: checking membership in a list of 100,000 items scans, on average, half of them; the identical check against a <code>set</code> of the same items is a near-constant-time hash lookup. Converting a list to a set before repeated membership tests is one of the single most common, highest-impact optimizations in real Python code.</p>
+
+        <h3 id="ch12-chained">Chained comparisons</h3>
+        <p>Python allows chaining comparison operators in a way that reads like mathematical notation, and — critically — behaves as <strong>a single short-circuiting expression</strong>, not two separate comparisons joined by <code>and</code>:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="n">1</span> &lt; x &lt; <span class="n">10</span>              <span class="c"># equivalent to: 1 &lt; x AND x &lt; 10</span>
+<span class="c"># but x is only evaluated ONCE, and if "1 &lt; x" is False, "x &lt; 10" is
+# never even evaluated -- true short-circuiting, not just sugar</span>
+
+<span class="n">0</span> &lt;= score &lt;= <span class="n">100</span>       <span class="c"># classic range-check idiom</span>
+
+a == b == c              <span class="c"># True only if all three are mutually equal</span></pre>
+        </div>
+        <div class="note warn">
+          <b class="label">Gotcha</b>
+          Chained comparisons can produce surprising results with non-transitive-looking expressions: <code>1 &lt; 2 &gt; 0</code> is a perfectly valid chain meaning <code>1 &lt; 2 AND 2 &gt; 0</code> → <code>True</code> — it's easy to misread as some other operation at a glance if you're not expecting arbitrary comparison operators to chain like this.
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 12 — Key takeaways</div>
+          <ul>
+            <li>Every operator is dunder-method dispatch under the hood — <code>a + b</code> is <code>a.__add__(b)</code>, which is precisely how custom classes gain operator support.</li>
+            <li><code>%</code> and <code>//</code> follow true mathematical flooring, diverging from C-family truncation for negative operands.</li>
+            <li><code>and</code>/<code>or</code> return operands, not booleans, and short-circuit — the mechanism behind the <code>x or default</code> idiom.</li>
+            <li><code>in</code> is <code>O(n)</code> on list/tuple but average <code>O(1)</code> on set/dict — one of the most impactful micro-optimizations available in everyday code.</li>
+            <li>Chained comparisons (<code>a &lt; b &lt; c</code>) evaluate the middle term once and short-circuit — not naive sugar for two independent comparisons.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch13">
+        <div class="chapter-kicker"><span class="num">CH. 13</span><span class="tag">Execution Shape</span></div>
+        <h2 class="chapter-title">Control Flow</h2>
+        <p>The constructs that decide what runs, in what order, and how many times — including two of Python's less-obvious features: the <code>else</code> clause on loops, and structural pattern matching, both of which have no direct equivalent in most C-family languages.</p>
+
+        <h3 id="ch13-if">if / elif / else</h3>
+        <p>Standard conditional branching, with one Python-specific nuance: there is no <code>switch</code> statement (until <code>match</code>, below), so long <code>elif</code> chains are the traditional way to express multi-way branching:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">if</span> score &gt;= <span class="n">90</span>:
+    grade = <span class="s">"A"</span>
+<span class="k">elif</span> score &gt;= <span class="n">80</span>:
+    grade = <span class="s">"B"</span>
+<span class="k">else</span>:
+    grade = <span class="s">"F"</span>
+
+<span class="c"># Ternary / conditional expression -- an expression, not a statement</span>
+label = <span class="s">"pass"</span> <span class="k">if</span> score &gt;= <span class="n">60</span> <span class="k">else</span> <span class="s">"fail"</span></pre>
+        </div>
+        <p>Every branch's truthiness is evaluated via <code>bool()</code> (Chapter 9), which in turn calls <code>__bool__</code> if defined, or falls back to <code>__len__</code> (empty containers are falsy), or defaults to truthy for any object defining neither.</p>
+
+        <h3 id="ch13-match">match-case (structural pattern matching)</h3>
+        <p><strong>PEP 634</strong> (Python 3.10) added <code>match</code>/<code>case</code> — genuinely more powerful than a C-style <code>switch</code>, because it matches on <em>structure and type</em>, not just equality against a single value:</p>
+        <div class="code-block">
+          <div class="code-head"><span>match_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">handle</span>(command):
+    <span class="k">match</span> command.split():
+        <span class="k">case</span> [<span class="s">"go"</span>, direction] <span class="k">if</span> direction <span class="k">in</span> (<span class="s">"n"</span>,<span class="s">"s"</span>,<span class="s">"e"</span>,<span class="s">"w"</span>):
+            <span class="k">return</span> f<span class="s">"Moving {direction}"</span>
+        <span class="k">case</span> [<span class="s">"take"</span>, *items]:
+            <span class="k">return</span> f<span class="s">"Taking {', '.join(items)}"</span>
+        <span class="k">case</span> [<span class="s">"look"</span>]:
+            <span class="k">return</span> <span class="s">"Looking around"</span>
+        <span class="k">case</span> _:
+            <span class="k">return</span> <span class="s">"Unknown command"</span>
+
+handle(<span class="s">"go n"</span>)          <span class="c"># 'Moving n'</span>
+handle(<span class="s">"take sword shield"</span>) <span class="c"># 'Taking sword, shield'</span></pre>
+        </div>
+        <p>Patterns can also destructure objects by attribute (<code>case Point(x=0, y=0):</code>), match against dict shapes (<code>case {"type": "user", "id": id}:</code>), bind captured values directly into names (<code>direction</code>, <code>items</code> above), and combine conditions with an optional trailing <code>if</code> <strong>guard</strong> clause. The final <code>case _:</code> is the wildcard — matches anything, conventionally placed last as the "default" case.</p>
+        <div class="note">
+          <b class="label">Not just syntax sugar for if/elif</b>
+          <code>match</code> genuinely performs <strong>structural</strong> matching — checking type, shape, and sub-values simultaneously in one readable pattern — something that would take considerably more nested <code>if</code>/<code>isinstance</code>/indexing logic to express equivalently, which is precisely the readability gap PEP 634 set out to close.
+        </div>
+
+        <h3 id="ch13-loops">Loops — for and while</h3>
+        <p>Python has exactly two loop keywords, and no C-style three-clause <code>for(init; cond; incr)</code> form — <code>for</code> always iterates over an <em>iterable</em>, never a numeric range by default:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">for</span> item <span class="k">in</span> [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]:      <span class="c"># iterates any iterable -- list, str, dict, generator...</span>
+    <span class="f">print</span>(item)
+
+<span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(<span class="n">5</span>):           <span class="c"># range() is how you get C-style counting</span>
+    <span class="f">print</span>(i)
+
+<span class="k">while</span> queue:                <span class="c"># condition checked BEFORE each iteration</span>
+    process(queue.pop())</pre>
+        </div>
+        <p>Under the hood (tying back to Part I), <code>for</code> works by calling <code>iter()</code> on the object to get an iterator, then repeatedly calling <code>next()</code> on it, catching <code>StopIteration</code> to know when to stop — the same protocol powers list comprehensions, generator consumption, and unpacking (Chapter 8).</p>
+
+        <h3 id="ch13-breakcontinue">break &amp; continue</h3>
+        <div class="deflist">
+          <div class="item"><dt><code>break</code></dt><dd>Exits the <em>innermost</em> enclosing loop immediately, skipping any remaining iterations entirely — control resumes at the first statement after the loop.</dd></div>
+          <div class="item"><dt><code>continue</code></dt><dd>Skips the rest of the <em>current</em> iteration's body and jumps straight to the next iteration's condition check (for <code>while</code>) or next item (for <code>for</code>) — the loop keeps running, just this one pass is cut short.</dd></div>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">for</span> n <span class="k">in</span> <span class="f">range</span>(<span class="n">10</span>):
+    <span class="k">if</span> n == <span class="n">5</span>:
+        <span class="k">break</span>          <span class="c"># stop the loop entirely once we hit 5</span>
+    <span class="k">if</span> n % <span class="n">2</span> == <span class="n">0</span>:
+        <span class="k">continue</span>       <span class="c"># skip even numbers, keep looping</span>
+    <span class="f">print</span>(n)           <span class="c"># prints: 1, 3</span></pre>
+        </div>
+        <p>Neither keyword has any effect on an <em>outer</em> loop when used inside a nested one — <code>break</code> only escapes the single innermost loop it's lexically inside; breaking out of multiple nested loops at once requires a flag variable, a function-with-<code>return</code>, or restructuring, since Python deliberately has no labeled-break statement.</p>
+
+        <h3 id="ch13-elseloops">else on loops</h3>
+        <p>This is the single most under-known control-flow feature in Python: <strong><code>for</code> and <code>while</code> loops can have an <code>else</code> clause</strong>, which runs if and only if the loop completes <strong>without hitting a <code>break</code></strong>. It's best read as "no-break" rather than the "else" the keyword suggests:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">has_duplicate</span>(items):
+    seen = <span class="f">set</span>()
+    <span class="k">for</span> item <span class="k">in</span> items:
+        <span class="k">if</span> item <span class="k">in</span> seen:
+            <span class="f">print</span>(f<span class="s">"Found duplicate: {item}"</span>)
+            <span class="k">break</span>
+        seen.add(item)
+    <span class="k">else</span>:
+        <span class="c"># only reached if the loop finished WITHOUT breaking --
+        # i.e. no duplicate was ever found</span>
+        <span class="f">print</span>(<span class="s">"No duplicates found"</span>)</pre>
+        </div>
+        <p>This eliminates a common pattern from other languages where you'd set a boolean flag before the loop, set it inside the <code>if</code>/<code>break</code> branch, and check the flag afterward — <code>for...else</code> collapses all three steps into the loop structure itself. It works identically on <code>while</code> loops (the <code>else</code> runs if the loop's condition became false naturally, not via <code>break</code>).</p>
+
+        <h3 id="ch13-pass">pass</h3>
+        <p><code>pass</code> is a genuine <strong>no-op statement</strong> — it does nothing at all, and exists purely to satisfy Python's grammar, which requires every block (<code>if</code>, <code>for</code>, <code>def</code>, <code>class</code>, etc.) to contain at least one statement. It fills a syntactically-required-but-logically-empty block:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">class</span> <span class="f">CustomError</span>(Exception):
+    <span class="k">pass</span>                  <span class="c"># a marker class with no extra behavior needed</span>
+
+<span class="k">def</span> <span class="f">not_implemented_yet</span>():
+    <span class="k">pass</span>                  <span class="c"># stub -- fill in later, but keeps the file syntactically valid now</span>
+
+<span class="k">if</span> debug_mode:
+    <span class="k">pass</span>                  <span class="c"># deliberately do nothing for now</span>
+<span class="k">else</span>:
+    log_error()</pre>
+        </div>
+        <p>It's distinct from both <code>...</code> (the <code>Ellipsis</code> singleton, sometimes used identically as a stub marker, but is actually an <em>expression</em> producing a real value rather than a statement) and simply leaving a block empty (which is a <code>SyntaxError</code> — Python's indentation-based grammar has no other way to denote an intentionally empty block).</p>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 13 — Key takeaways</div>
+          <ul>
+            <li><code>match</code>/<code>case</code> performs genuine <strong>structural</strong> pattern matching — type, shape, and value simultaneously — not just a value-equality switch.</li>
+            <li><code>for</code> always iterates an iterable via the <code>iter()</code>/<code>next()</code> protocol; <code>range()</code> is how you opt into C-style counting.</li>
+            <li><code>break</code> exits the innermost loop only; <code>continue</code> skips to the next iteration; neither has a labeled/multi-level form in Python.</li>
+            <li><strong><code>for</code>/<code>while</code>...<code>else</code></strong> runs its <code>else</code> block only when the loop finishes without a <code>break</code> — read it as "no-break," and use it to eliminate manual flag-variable patterns.</li>
+            <li><code>pass</code> is a true no-op that exists solely to satisfy Python's syntax, which never allows a truly empty block.</li>
+          </ul>
+        </div>
+      </section>
+
+
+
+<div class="end-note">
+        END OF PART II · continue to Part III when ready
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<a href="#top" class="backtotop" id="backtotop">↑</a>
+
+<script>
+  // Mobile sidebar toggle
+  const sidebar = document.getElementById('sidebar');
+  const menuToggle = document.getElementById('menuToggle');
+  menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  document.querySelectorAll('.sidebar a').forEach(a => a.addEventListener('click', () => sidebar.classList.remove('open')));
+
+  // Back to top visibility
+  const backtotop = document.getElementById('backtotop');
+  window.addEventListener('scroll', () => {
+    backtotop.classList.toggle('show', window.scrollY > 600);
+  });
+
+  // Scroll-spy active link highlighting
+  const links = Array.from(document.querySelectorAll('nav.toc a'));
+  const targets = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const id = '#' + entry.target.id;
+      const link = links.find(a => a.getAttribute('href') === id);
+      if (!link) return;
+      if (entry.isIntersecting){
+        links.forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  targets.forEach(t => io.observe(t));
+</script>
+
+</body>
+</html>

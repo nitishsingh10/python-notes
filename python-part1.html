@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Python Works Internally — Part I</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0d13;
+    --bg-raise: #10141c;
+    --panel: #131926;
+    --panel-2: #161d2c;
+    --grid-line: #1c2433;
+    --border: #232c3d;
+    --border-soft: #1a2130;
+    --text: #dfe4ec;
+    --text-dim: #9aa5b6;
+    --text-faint: #5f6a7d;
+    --amber: #f0a83c;
+    --amber-dim: #b9822f;
+    --blue: #6fb3e0;
+    --blue-dim: #3f6a8a;
+    --rust: #e4744f;
+    --green: #7fc79e;
+    --violet: #b394d6;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --maxw: 860px;
+  }
+
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+
+  body{
+    margin: 0;
+    background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 100% 42px,
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 42px 100%,
+      var(--bg);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection{ background: var(--amber); color: #16110a; }
+
+  a{ color: var(--blue); text-decoration: none; }
+  a:hover{ text-decoration: underline; }
+
+  code, pre, .mono{ font-family: var(--mono); }
+
+  /* ---------- Layout shell ---------- */
+  .shell{
+    display: grid;
+    grid-template-columns: 300px minmax(0,1fr);
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: rgba(10,13,19,0.9);
+    backdrop-filter: blur(6px);
+    padding: 28px 20px 60px;
+  }
+  .sidebar::-webkit-scrollbar{ width: 8px; }
+  .sidebar::-webkit-scrollbar-thumb{ background: var(--border); border-radius: 4px; }
+
+  .brand{
+    display:flex; align-items:center; gap: 10px;
+    margin-bottom: 6px;
+  }
+  .brand-mark{
+    width: 30px; height: 30px; flex: none;
+    border: 1px solid var(--amber-dim);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    color: var(--amber);
+    font-family: var(--mono); font-weight: 700; font-size: 13px;
+    background: linear-gradient(160deg, rgba(240,168,60,0.14), transparent);
+  }
+  .brand-text{ font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); letter-spacing: 0.02em; line-height: 1.35;}
+  .brand-text b{ color: var(--text); display:block; font-size: 13px; }
+
+  .part-label{
+    margin: 22px 0 18px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--amber);
+    background: var(--panel);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+  .part-label b{ display:block; color: var(--text); font-size: 13px; margin-bottom: 3px; letter-spacing: 0; }
+
+  nav.toc{ font-size: 13.5px; }
+  nav.toc .ch{ margin-bottom: 4px; }
+  nav.toc .ch-link{
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 7px 8px;
+    border-radius: 5px;
+    color: var(--text);
+    font-weight: 600;
+  }
+  nav.toc .ch-link:hover{ background: var(--panel); text-decoration:none; }
+  nav.toc .ch-link.active{ background: var(--panel-2); color: var(--amber); }
+  nav.toc .ch-num{ font-family: var(--mono); color: var(--text-faint); font-size: 12px; flex: none; }
+  nav.toc .ch-link.active .ch-num{ color: var(--amber-dim); }
+
+  nav.toc .sub{ list-style: none; margin: 2px 0 10px 30px; padding: 0; border-left: 1px solid var(--border-soft); }
+  nav.toc .sub li a{
+    display: block;
+    padding: 4px 0 4px 12px;
+    color: var(--text-dim);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  nav.toc .sub li a:hover{ color: var(--text); text-decoration: none; }
+  nav.toc .sub li a.active{ color: var(--amber); }
+
+  .sidebar-foot{
+    margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+    font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); line-height:1.6;
+  }
+
+  /* ---------- Main content ---------- */
+  main{ min-width: 0; padding: 64px 48px 140px; }
+  .content{ max-width: var(--maxw); margin: 0 auto; }
+
+  .doc-header{ margin-bottom: 64px; }
+  .doc-header .eyebrow{
+    font-family: var(--mono); color: var(--amber); font-size: 12.5px;
+    letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 14px;
+  }
+  .doc-header h1{
+    font-family: var(--mono); font-size: clamp(28px, 4vw, 42px);
+    line-height: 1.2; margin: 0 0 18px; color: #fff; letter-spacing: -0.01em;
+  }
+  .doc-header .lede{ color: var(--text-dim); font-size: 17px; max-width: 640px; }
+  .doc-header .goal-box{
+    margin-top: 28px; padding: 16px 18px;
+    border: 1px dashed var(--border);
+    background: var(--panel);
+    font-size: 14px; color: var(--text-dim);
+  }
+  .doc-header .goal-box b{ color: var(--amber); font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; display:block; margin-bottom: 6px;}
+
+  section.chapter{ padding-top: 30px; margin-top: 10px; scroll-margin-top: 24px; }
+  section.chapter + section.chapter{ border-top: 1px solid var(--border-soft); margin-top: 80px; padding-top: 70px; }
+
+  .chapter-kicker{
+    display:flex; align-items:center; gap: 14px; margin-bottom: 10px;
+  }
+  .chapter-kicker .num{
+    font-family: var(--mono); font-size: 13px; color: var(--bg);
+    background: var(--amber); border-radius: 4px; padding: 3px 8px; font-weight: 700;
+  }
+  .chapter-kicker .tag{ font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  h2.chapter-title{
+    font-family: var(--mono); font-size: clamp(24px,3vw,32px);
+    color: #fff; margin: 0 0 26px; letter-spacing: -0.01em; scroll-margin-top: 24px;
+  }
+
+  h3{
+    font-family: var(--mono); font-size: 19px; color: var(--amber);
+    margin: 46px 0 14px; letter-spacing: -0.01em; scroll-margin-top: 24px;
+    display:flex; align-items:baseline; gap:10px;
+  }
+  h3::before{ content: '§'; color: var(--text-faint); font-size: 15px; }
+
+  h4{ font-family: var(--mono); font-size: 15px; color: var(--blue); margin: 26px 0 10px; }
+
+  p{ margin: 0 0 16px; color: var(--text); }
+  p.dim, li.dim{ color: var(--text-dim); }
+  strong{ color: #fff; font-weight: 600; }
+  em.term{ color: var(--amber); font-style: normal; font-weight: 600; }
+
+  ul, ol{ margin: 0 0 18px; padding-left: 22px; color: var(--text); }
+  li{ margin-bottom: 8px; }
+  li::marker{ color: var(--amber-dim); }
+
+  /* inline code */
+  :not(pre) > code{
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--blue);
+    padding: 1.5px 6px;
+    border-radius: 4px;
+    font-size: 0.87em;
+  }
+
+  /* code blocks */
+  .code-block{
+    margin: 20px 0 26px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1119;
+  }
+  .code-head{
+    display:flex; align-items:center; justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .code-head .dots{ display:flex; gap:5px; }
+  .code-head .dots span{ width:8px; height:8px; border-radius:50%; background: var(--border); display:inline-block; }
+  pre{
+    margin: 0; padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.3px;
+    line-height: 1.65;
+    color: #d7dde6;
+  }
+  pre .c{ color: var(--text-faint); font-style: italic; } /* comment */
+  pre .k{ color: var(--violet); } /* keyword */
+  pre .s{ color: var(--green); } /* string */
+  pre .n{ color: var(--amber); } /* number/name emphasis */
+  pre .f{ color: var(--blue); } /* function/builtin */
+  pre .o{ color: var(--rust); } /* operator/opcode */
+
+  /* callouts */
+  .note{
+    margin: 22px 0; padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--blue);
+    background: var(--panel);
+    font-size: 14.5px; color: var(--text-dim);
+  }
+  .note b.label{ color: var(--blue); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display:block; margin-bottom: 6px; }
+
+  .warn{ border-left-color: var(--rust); }
+  .warn b.label{ color: var(--rust); }
+
+  .insight{ border-left-color: var(--amber); }
+  .insight b.label{ color: var(--amber); }
+
+  .exercise{
+    margin: 26px 0; padding: 16px 18px;
+    border: 1px solid var(--amber-dim);
+    background: linear-gradient(160deg, rgba(240,168,60,0.06), transparent);
+    font-size: 14.5px;
+  }
+  .exercise b.label{ color: var(--amber); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; display:block; margin-bottom: 8px; }
+  .exercise ol, .exercise ul{ margin-bottom: 0; }
+
+  /* tables */
+  table{ width: 100%; border-collapse: collapse; margin: 20px 0 28px; font-size: 14px; }
+  th, td{ text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  th{ font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); border-bottom: 1px solid var(--border); }
+  td code{ white-space: nowrap; }
+  tr:hover td{ background: rgba(255,255,255,0.015); }
+
+  /* pipeline diagram (signature element for ch.2 but reused) */
+  .pipeline{
+    display:flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+    margin: 30px 0 34px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    overflow-x: auto;
+  }
+  .pipeline .stage{
+    flex: 1 1 0; min-width: 118px;
+    padding: 16px 14px;
+    border-right: 1px solid var(--border-soft);
+    position: relative;
+  }
+  .pipeline .stage:last-child{ border-right: none; }
+  .pipeline .stage .k{ font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .pipeline .stage .v{ font-family: var(--mono); font-size: 14px; color: var(--amber); margin-top: 6px; font-weight: 600; }
+  .pipeline .stage .d{ font-size: 11.5px; color: var(--text-dim); margin-top: 5px; line-height: 1.4; }
+  .pipeline .stage::after{
+    content: '→';
+    position: absolute; right: -11px; top: 50%; transform: translateY(-50%);
+    color: var(--text-faint); font-size: 14px; z-index: 2;
+  }
+  .pipeline .stage:last-child::after{ content: ''; }
+
+  /* frame/stack diagram box, used heavily in ch4/ch5 */
+  .frame-diagram{
+    display: grid; gap: 10px;
+    margin: 24px 0 30px;
+    grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+  }
+  .frame-box{
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 12px 14px;
+    border-radius: 6px;
+  }
+  .frame-box .fb-title{ font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .frame-box .fb-row{ display:flex; justify-content: space-between; font-family: var(--mono); font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .frame-box .fb-row:last-child{ border-bottom: none; }
+  .frame-box .fb-row .name{ color: var(--blue); }
+  .frame-box .fb-row .val{ color: var(--text-dim); }
+
+  /* key/value definition list */
+  .deflist{ margin: 20px 0 28px; }
+  .deflist .item{ display: grid; grid-template-columns: 160px 1fr; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+  .deflist .item dt{ font-family: var(--mono); color: var(--amber); font-size: 13.5px; font-weight: 600; }
+  .deflist .item dd{ margin: 0; color: var(--text-dim); font-size: 14.5px; }
+
+  .qa{ margin: 20px 0 28px; }
+  .qa .q{ font-family: var(--mono); color: #fff; font-size: 14.5px; font-weight: 600; margin-bottom: 6px; }
+  .qa .q::before{ content: 'Q. '; color: var(--amber); }
+  .qa .a{ color: var(--text-dim); font-size: 14.5px; margin-bottom: 22px; padding-left: 20px; border-left: 2px solid var(--border); }
+
+  .chapter-summary{
+    margin-top: 50px; padding: 20px 22px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .chapter-summary .cs-title{ font-family: var(--mono); color: var(--amber); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .chapter-summary ul{ margin-bottom: 0; }
+  .chapter-summary li{ font-size: 14px; color: var(--text-dim); }
+
+  .end-note{
+    margin-top: 90px; padding-top: 34px; border-top: 1px solid var(--border-soft);
+    color: var(--text-faint); font-family: var(--mono); font-size: 12.5px; text-align: center;
+  }
+
+  .backtotop{
+    position: fixed; right: 26px; bottom: 26px;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--amber); display:grid; place-items:center;
+    font-family: var(--mono); text-decoration:none; font-size: 16px;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+  }
+  .backtotop.show{ opacity: 1; pointer-events: auto; }
+  .backtotop:hover{ text-decoration:none; border-color: var(--amber-dim); }
+
+  .menu-toggle{ display:none; }
+
+  @media (max-width: 900px){
+    .shell{ grid-template-columns: 1fr; }
+    .sidebar{
+      position: fixed; z-index: 50; left: 0; top: 0; width: 82%; max-width: 320px;
+      transform: translateX(-100%); transition: transform 0.25s ease;
+      box-shadow: 20px 0 40px rgba(0,0,0,0.4);
+    }
+    .sidebar.open{ transform: translateX(0); }
+    main{ padding: 84px 20px 100px; }
+    .menu-toggle{
+      display:flex; position: fixed; top: 16px; left: 16px; z-index: 60;
+      width: 44px; height: 44px; align-items:center; justify-content:center;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--amber); font-family: var(--mono); font-size: 18px;
+    }
+    .pipeline{ flex-direction: column; }
+    .pipeline .stage{ border-right: none; border-bottom: 1px solid var(--border-soft); }
+    .pipeline .stage::after{ content: '↓'; right: 50%; top: auto; bottom: -11px; transform: translateX(50%); }
+    .pipeline .stage:last-child{ border-bottom: none; }
+    .deflist .item{ grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+</head>
+<body id="top">
+
+<button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation">☰</button>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">λ</div>
+      <div class="brand-text"><b>Python, In &amp; Out</b>from source to silicon</div>
+    </div>
+
+    <div class="part-label">
+      <b>Part I</b>
+      How Python Works Internally (Runtime)
+      <div class="ch">
+      <li><a href="./python-part2.html">Part II</a></li>
+      </div>
+    <div class="ch">
+      <li><a href="./python-part3.html">Part III</a></li>
+    </div>
+    </div>
+
+    <nav class="toc" id="toc">
+      <div class="ch">
+        <a class="ch-link" href="#ch1"><span class="ch-num">01</span> Python Ecosystem</a>
+        <ul class="sub">
+          <li><a href="#ch1-history">History of Python</a></li>
+          <li><a href="#ch1-zen">Philosophy (Zen of Python)</a></li>
+          <li><a href="#ch1-implementations">CPython vs PyPy vs Jython vs IronPython</a></li>
+          <li><a href="#ch1-interpreted">Why Python is interpreted</a></li>
+          <li><a href="#ch1-whyc">Why CPython is written in C</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch2"><span class="ch-num">02</span> Execution Pipeline</a>
+        <ul class="sub">
+          <li><a href="#ch2-source">Source code</a></li>
+          <li><a href="#ch2-lexer">Lexer &amp; Tokens</a></li>
+          <li><a href="#ch2-parser">Parser, CST &amp; AST</a></li>
+          <li><a href="#ch2-compiler">Compiler &amp; Bytecode</a></li>
+          <li><a href="#ch2-pvm">The PVM</a></li>
+          <li><a href="#ch2-pycache">__pycache__ &amp; .pyc</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch3"><span class="ch-num">03</span> Bytecode &amp; VM</a>
+        <ul class="sub">
+          <li><a href="#ch3-bytecode">Bytecode &amp; instructions</a></li>
+          <li><a href="#ch3-opcodes">Opcodes &amp; instruction pointer</a></li>
+          <li><a href="#ch3-stackmachine">Stack machine model</a></li>
+          <li><a href="#ch3-compvsinterp">Compiler vs interpreter</a></li>
+          <li><a href="#ch3-dis">The dis module</a></li>
+          <li><a href="#ch3-flow">Execution flow, end to end</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch4"><span class="ch-num">04</span> Python Object Model</a>
+        <ul class="sub">
+          <li><a href="#ch4-everything">Everything is an object</a></li>
+          <li><a href="#ch4-identity">Identity, type, value</a></li>
+          <li><a href="#ch4-names">Names, bindings &amp; references</a></li>
+          <li><a href="#ch4-novars">Why Python has no "variables"</a></li>
+          <li><a href="#ch4-assignment">Assignment &amp; multiple references</a></li>
+          <li><a href="#ch4-lifetime">Object lifetime</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch5"><span class="ch-num">05</span> Memory Management</a>
+        <ul class="sub">
+          <li><a href="#ch5-heapstack">Heap vs stack</a></li>
+          <li><a href="#ch5-refcount">Reference counting</a></li>
+          <li><a href="#ch5-gc">The garbage collector</a></li>
+          <li><a href="#ch5-cycles">Cyclic references</a></li>
+          <li><a href="#ch5-id">id() and del</a></li>
+          <li><a href="#ch5-weakref">Weak references</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch6"><span class="ch-num">06</span> Namespaces &amp; Scope</a>
+        <ul class="sub">
+          <li><a href="#ch6-legb">The LEGB rule</a></li>
+          <li><a href="#ch6-global">global</a></li>
+          <li><a href="#ch6-nonlocal">nonlocal</a></li>
+          <li><a href="#ch6-namespaces">Module &amp; function namespaces</a></li>
+        </ul>
+      </div>
+      <div class="ch">
+        <a class="ch-link" href="#ch7"><span class="ch-num">07</span> Import System</a>
+        <ul class="sub">
+          <li><a href="#ch7-modules">Modules &amp; packages</a></li>
+          <li><a href="#ch7-init">__init__.py</a></li>
+          <li><a href="#ch7-caching">Import caching &amp; sys.modules</a></li>
+          <li><a href="#ch7-circular">Circular imports</a></li>
+          <li><a href="#ch7-relabs">Relative vs absolute imports</a></li>
+        </ul>
+      </div>
+
+    </nav>
+
+    <div class="sidebar-foot">
+      07 chapters · runtime deep-dive<br>
+      read top to bottom — each chapter builds on the last
+    </div>
+  </aside>
+
+  <main>
+    <div class="content">
+
+      <header class="doc-header">
+        <div class="eyebrow">Python Internals — Study Notes</div>
+        <h1>Part I: How Python Works Internally<br>(The Runtime)</h1>
+        <p class="lede">From the moment you press <strong>Enter</strong> on <code>python app.py</code> to the moment your program produces output — every layer of translation, memory, and machinery in between.</p>
+        <div class="goal-box">
+          <b>Goal of this part</b>
+          Build a working mental model of CPython's execution pipeline: how text becomes tokens, tokens become a tree, a tree becomes bytecode, and bytecode becomes running behavior — plus the object model, memory system, scoping rules, and import machinery that every Python program depends on, whether you've ever thought about them or not.
+        </div>
+      </header>
+
+      <section class="chapter" id="ch1">
+        <div class="chapter-kicker"><span class="num">CH. 01</span><span class="tag">Foundations</span></div>
+        <h2 class="chapter-title">The Python Ecosystem</h2>
+        <p>Before touching a single opcode, it helps to know <em class="term">what Python actually is</em> — not the syntax, but the project: who built it, why it looks the way it does, and which of the several "Pythons" you are actually running when you type <code>python</code> in a terminal. Almost every internals question later in this document ("why is this slow," "why does this behave oddly") traces back to a decision made in this chapter.</p>
+
+        <h3 id="ch1-history">History of Python</h3>
+        <p>Python was created by <strong>Guido van Rossum</strong> and first released in <strong>1991</strong>, while he was working at Centrum Wiskunde &amp; Informatica (CWI) in the Netherlands. It grew out of a language called <strong>ABC</strong>, an educational language Guido had worked on that was elegant but not extensible enough for real systems work. Python kept ABC's readability goals but fixed its extensibility problem by making the language easy to embed and extend using C.</p>
+        <p>The name has nothing to do with the snake — Guido was reading scripts from <strong>Monty Python's Flying Circus</strong> at the time and wanted a name that was short, unique, and slightly irreverent.</p>
+
+        <div class="deflist">
+          <div class="item"><dt>1989–1991</dt><dd>Guido begins Python as a "hobby" project over the Christmas holidays; first public release, 0.9.0, ships in Feb 1991 — already with classes, exception handling, functions, and the core list/dict/str types.</dd></div>
+          <div class="item"><dt>1994</dt><dd>Python 1.0 released. Functional programming tools (<code>lambda</code>, <code>map</code>, <code>filter</code>, <code>reduce</code>) added.</dd></div>
+          <div class="item"><dt>2000</dt><dd>Python 2.0 introduces list comprehensions, garbage collection for cycles, and a community-driven development process (PEPs formalized).</dd></div>
+          <div class="item"><dt>2008</dt><dd>Python 3.0 released — an intentionally backward-incompatible cleanup (unified <code>str</code>/Unicode model, <code>print()</code> as a function, integer division changes). It was designed without preserving compatibility, which is why the Python 2→3 migration took over a decade.</dd></div>
+          <div class="item"><dt>2020</dt><dd>Python 2 reaches end-of-life (Jan 1, 2020). Python 3 becomes the sole actively developed line.</dd></div>
+          <div class="item"><dt>Today</dt><dd>Python is steered by the <strong>Python Software Foundation (PSF)</strong> through a formal proposal process (<strong>PEPs — Python Enhancement Proposals</strong>), with a yearly release cadence (PEP 602) — one minor version (3.9, 3.10, 3.11 …) per year.</dd></div>
+        </div>
+
+        <div class="note">
+          <b class="label">Why this matters for internals</b>
+          Python's design history explains many "quirks" you'll meet later: dynamic typing and duck typing come from ABC's teaching goals; the C-extension story exists because Guido wanted Python to glue together existing C libraries, not replace them. The interpreter's architecture was never designed for raw speed — it was designed for <em>rapid, readable glue code</em>, and every performance characteristic you'll learn about downstream follows from that founding trade-off.
+        </div>
+
+        <h3 id="ch1-zen">Philosophy — The Zen of Python</h3>
+        <p>PEP 20, written by long-time core developer <strong>Tim Peters</strong>, encodes Python's design philosophy as 19 aphorisms. It is literally importable:</p>
+
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c">&gt;&gt;&gt; import this</span>
+The Zen of Python, by Tim Peters
+
+Beautiful is better than ugly.
+Explicit is better than implicit.
+Simple is better than complex.
+Complex is better than complicated.
+Flat is better than nested.
+Sparse is better than dense.
+Readability counts.
+Special cases aren't special enough to break the rules.
+Although practicality beats purity.
+Errors should never pass silently.
+Unless explicitly silenced.
+In the face of ambiguity, refuse the temptation to guess.
+There should be one-- and preferably only one --obvious way to do it.
+Although that way may not be obvious at first unless you're Dutch.
+Now is better than never.
+Although never is often better than *right* now.
+If the implementation is hard to explain, it's a bad idea.
+If the implementation is easy to explain, it may be a good idea.
+Namespaces are one honking great idea -- let's do more of those!</pre>
+        </div>
+        <p>This isn't a poster on a wall — it is enforced, in practice, by the core developers who review every language change. Three lines matter disproportionately for the rest of this document:</p>
+        <ul>
+          <li><strong>"Explicit is better than implicit"</strong> — is why Python has no implicit variable declarations, no automatic type coercion between incompatible types, and why scoping rules (Chapter 6) require explicit <code>global</code>/<code>nonlocal</code> keywords to mutate outer scope.</li>
+          <li><strong>"There should be one obvious way to do it"</strong> — is why Python resists adding redundant syntax, and why the object model (Chapter 4) is unusually uniform: <em>everything</em> is an object, with no special-cased primitives.</li>
+          <li><strong>"Namespaces are one honking great idea"</strong> — is a direct preview of Chapter 6 and Chapter 7: Python's entire scoping and import system is built from nothing more exotic than dictionaries mapping names to objects.</li>
+        </ul>
+
+        <h3 id="ch1-implementations">CPython vs PyPy vs Jython vs IronPython</h3>
+        <p>"Python" is a <em class="term">language specification</em>, not a single program. Multiple independent implementations exist, and they can behave differently at the margins (garbage collection timing, C-extension support, speed). Knowing which one you're running changes what "how Python works internally" even means.</p>
+
+        <table>
+          <tr><th>Implementation</th><th>Written in</th><th>Compiles to</th><th>Notable trait</th></tr>
+          <tr><td><strong>CPython</strong></td><td>C</td><td>Bytecode, run on a stack-based VM</td><td>The reference implementation; what "Python" means by default; has the GIL; what this document describes</td></tr>
+          <tr><td><strong>PyPy</strong></td><td>RPython (a restricted, translatable subset of Python)</td><td>Bytecode → machine code via JIT</td><td>Just-in-time compiled; often 4–10x faster on long-running numeric/loop-heavy code; weaker C-extension compatibility</td></tr>
+          <tr><td><strong>Jython</strong></td><td>Java</td><td>JVM bytecode</td><td>Runs on the JVM, gives direct access to Java class libraries; no CPython C-extension support; effectively unmaintained for Python 3</td></tr>
+          <tr><td><strong>IronPython</strong></td><td>C#</td><td>.NET CLR bytecode (via DLR)</td><td>Runs on the .NET runtime, interoperates with C#/.NET libraries; Python 3 support arrived late (IronPython 3)</td></tr>
+        </table>
+
+        <div class="note insight">
+          <b class="label">Insight</b>
+          Every implementation must agree on <em>language semantics</em> (what <code>for</code> loops do, how exceptions propagate, what <code>__init__</code> means) but is free to choose its own <em>execution strategy</em>. CPython chose "simplest possible correct implementation" — a straightforward tree-walking-turned-bytecode interpreter with manual memory management via reference counting. That choice is why CPython is easy to embed and extend in C, and also why it is not the fastest implementation available.
+        </div>
+
+        <h3 id="ch1-interpreted">Why Python is "interpreted" (historically)</h3>
+        <p>Calling Python "an interpreted language" is a simplification worth unpacking, because — as you'll see in Chapter 2 — CPython actually <em>compiles</em> your source code before running it. The compilation step just targets a much higher-level, portable <em class="term">bytecode</em> instead of native machine code, and that bytecode is then interpreted by a virtual machine at runtime rather than executed directly by the CPU.</p>
+        <p>The "interpreted" label survives for three real reasons:</p>
+        <ol>
+          <li><strong>No separate build step from the user's perspective.</strong> You run <code>python app.py</code> directly; there's no explicit "compile, then link, then run" workflow like C or Rust. Compilation to bytecode happens transparently and is cached (Chapter 2).</li>
+          <li><strong>The compiled artifact (bytecode) is not native machine code.</strong> Unlike a C compiler, which emits instructions the CPU executes directly, CPython emits instructions that only <em>CPython's own virtual machine</em> understands — so a second layer of interpretation is unavoidable at runtime.</li>
+          <li><strong>Late binding, dynamic typing.</strong> Types are resolved, attributes are looked up, and even some code paths are decided at <em>runtime</em> rather than compile time — the hallmark of interpreted-language behavior, as opposed to ahead-of-time compiled languages that resolve most of this statically.</li>
+        </ol>
+        <p>So the accurate mental model is: <strong>Python source is compiled to bytecode, and that bytecode is interpreted.</strong> "Interpreted language" really describes the second half of that sentence, plus the dynamic, late-bound execution model — not the absence of compilation.</p>
+
+        <h3 id="ch1-whyc">Why CPython is written in C</h3>
+        <p>Guido chose C for the reference implementation for pragmatic, not ideological, reasons:</p>
+        <ul>
+          <li><strong>Portability.</strong> In 1991, a C compiler existed for essentially every platform that mattered. Writing the interpreter in C meant Python could run almost anywhere without a bootstrapping problem.</li>
+          <li><strong>Performance floor.</strong> C gives direct control over memory layout and avoids paying for a managed runtime underneath your managed runtime — important because Python itself already adds a large abstraction layer on top.</li>
+          <li><strong>The extension story.</strong> Python's core use case from day one was <em>gluing together existing C libraries</em> (numerical code, system libraries, GUI toolkits). Writing the interpreter itself in C meant the exact same ABI and calling conventions could be used to write native extension modules — this is the entire foundation of the C-API (<code>Python.h</code>) and why libraries like NumPy, and CPython built-ins like <code>math</code>, are C code wearing a Python interface.</li>
+          <li><strong>Simplicity of implementation.</strong> A straightforward, "reference-counting + tree-of-structs" design in C was achievable by a small team, which mattered enormously for a project without corporate backing in its early years.</li>
+        </ul>
+        <div class="note warn">
+          <b class="label">Consequence you'll feel later</b>
+          Because CPython objects are literally C structs (a <code>PyObject*</code> header plus type-specific fields) and reference counting is embedded directly into that struct, CPython gained a straightforward, deterministic memory model (Chapter 5) — but also a global lock around interpreter state, the infamous <strong>GIL (Global Interpreter Lock)</strong>, which exists specifically to keep that C-level reference counting thread-safe without paying for atomic operations on every single refcount change.
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 1 — Key takeaways</div>
+          <ul>
+            <li>Python is a <em>language spec</em>; CPython is the reference <em>implementation</em> — the one this whole document describes.</li>
+            <li>PyPy, Jython, and IronPython trade some compatibility or simplicity for speed or host-platform interop.</li>
+            <li>"Interpreted" really means: compiled to portable bytecode, then interpreted by a VM, with types resolved dynamically at runtime.</li>
+            <li>CPython is written in C for portability, a native performance floor, and — most importantly — to make C-extension development possible using the same object model as the interpreter itself.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch2">
+        <div class="chapter-kicker"><span class="num">CH. 02</span><span class="tag">Pipeline</span></div>
+        <h2 class="chapter-title">The Execution Pipeline</h2>
+        <p>This chapter answers the literal question in the Part I goal: <em class="term">what happens between pressing Enter and your program running?</em> CPython moves your source text through six distinct representations before a single line of your logic actually executes.</p>
+
+        <div class="pipeline">
+          <div class="stage"><div class="k">01</div><div class="v">Source</div><div class="d">raw .py text</div></div>
+          <div class="stage"><div class="k">02</div><div class="v">Lexer</div><div class="d">text → tokens</div></div>
+          <div class="stage"><div class="k">03</div><div class="v">Parser</div><div class="d">tokens → CST</div></div>
+          <div class="stage"><div class="k">04</div><div class="v">AST</div><div class="d">CST → AST</div></div>
+          <div class="stage"><div class="k">05</div><div class="v">Compiler</div><div class="d">AST → bytecode</div></div>
+          <div class="stage"><div class="k">06</div><div class="v">PVM</div><div class="d">executes bytecode</div></div>
+        </div>
+
+        <h3 id="ch2-source">Source code</h3>
+        <p>Everything starts as a plain text file — a sequence of Unicode characters. CPython first has to figure out the file's encoding (it looks for a <code># -*- coding: utf-8 -*-</code> style comment on line 1 or 2, per <strong>PEP 263</strong>; if none is found, it assumes UTF-8). At this stage the file is just bytes/characters — Python has no idea yet what a "function" or "loop" is.</p>
+
+        <h3 id="ch2-lexer">Lexer &amp; Tokens</h3>
+        <p>The <em class="term">lexer</em> (also called the <em class="term">tokenizer</em>) scans the raw character stream and groups characters into meaningful chunks called <strong>tokens</strong> — the smallest units the grammar understands: keywords, identifiers, literals, operators, punctuation, and (uniquely to Python) synthetic <code>INDENT</code>/<code>DEDENT</code> tokens that stand in for Python's significant whitespace.</p>
+        <p>You can watch this stage directly with the standard library's <code>tokenize</code> module:</p>
+        <div class="code-block">
+          <div class="code-head"><span>tokenize_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> tokenize, io
+
+src = <span class="s">b"x = 1 if y &gt; 2 else 3\n"</span>
+<span class="k">for</span> tok <span class="k">in</span> tokenize.tokenize(io.BytesIO(src).readline):
+    <span class="f">print</span>(tok)
+
+<span class="c"># TokenInfo(type=NAME,   string='x',    ...)
+# TokenInfo(type=OP,     string='=',    ...)
+# TokenInfo(type=NUMBER, string='1',    ...)
+# TokenInfo(type=NAME,   string='if',   ...)
+# TokenInfo(type=NAME,   string='y',    ...)
+# TokenInfo(type=OP,     string='&gt;',    ...)
+# TokenInfo(type=NUMBER, string='2',    ...)
+# TokenInfo(type=NAME,   string='else', ...)
+# TokenInfo(type=NUMBER, string='3',    ...)
+# TokenInfo(type=NEWLINE,string='\n',   ...)</span></pre>
+        </div>
+        <p>Note that at this point <code>if</code> is just a <code>NAME</code>-class token to the tokenizer, not yet understood as a control-flow keyword — that meaning is only assigned by the parser's grammar rules in the next stage. The lexer's job is purely lexical: it doesn't know or care about grammar, only about "what shape of token comes next."</p>
+
+        <h3 id="ch2-parser">Parser, CST &amp; AST</h3>
+        <p>The <strong>parser</strong> consumes the flat token stream and imposes structure on it according to Python's formal grammar. Modern CPython (3.9+) uses a <strong>PEG parser</strong> (Parsing Expression Grammar, PEP 617), replacing the older LL(1) grammar — this is what let Python add tricky-to-parse syntax like the <code>match</code> statement and parenthesized context managers.</p>
+        <p>Parsing happens in two conceptual layers:</p>
+        <div class="deflist">
+          <div class="item"><dt>CST</dt><dd><strong>Concrete Syntax Tree</strong> — a parse tree that mirrors the grammar exactly, including every token (parentheses, commas, colons). It is a faithful, lossless structural representation of the source text.</dd></div>
+          <div class="item"><dt>AST</dt><dd><strong>Abstract Syntax Tree</strong> — a simplified tree that keeps only <em>semantically meaningful</em> structure and drops syntactic noise (redundant parentheses, punctuation used only for grouping). This is the tree the compiler actually works from.</dd></div>
+        </div>
+        <p>You can inspect the AST directly:</p>
+        <div class="code-block">
+          <div class="code-head"><span>ast_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> ast
+
+tree = ast.parse(<span class="s">"x = 1 if y &gt; 2 else 3"</span>)
+<span class="f">print</span>(ast.dump(tree, indent=2))
+
+<span class="c"># Module(
+#   body=[
+#     Assign(
+#       targets=[Name(id='x', ctx=Store())],
+#       value=IfExp(
+#         test=Compare(left=Name(id='y', ctx=Load()),
+#                       ops=[Gt()],
+#                       comparators=[Constant(value=2)]),
+#         body=Constant(value=1),
+#         orelse=Constant(value=3)))],
+#   type_ignores=[])</span></pre>
+        </div>
+        <p>Notice how much richer this is than the flat token list — the tree now encodes that this is an <em>assignment</em>, whose value is a <em>conditional expression</em>, whose test is a <em>comparison</em>. This is also the stage where <strong>SyntaxError</strong> is raised, if your code is grammatically invalid — the AST is only built for grammatically valid programs.</p>
+        <div class="note">
+          <b class="label">Where else the AST is used</b>
+          The <code>ast</code> module isn't just for introspection — linters (flake8, pylint), formatters (black), static analyzers (mypy touches a similar typed tree), and code-transformation tools all operate on this same tree structure rather than raw text, because text is ambiguous and the AST isn't.
+        </div>
+
+        <h3 id="ch2-compiler">Compiler &amp; Bytecode</h3>
+        <p>CPython's compiler walks the AST and emits <strong>bytecode</strong> — a low-level, portable instruction set for CPython's own virtual machine. This is a genuine compilation step (source → intermediate representation → target instructions), just like a C compiler emitting assembly — except the "assembly" here targets a software VM instead of a physical CPU. Chapter 3 covers the instruction format itself in depth; for now, see it in its raw form:</p>
+        <div class="code-block">
+          <div class="code-head"><span>compile_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>code_obj = <span class="f">compile</span>(<span class="s">"x = 1 if y &gt; 2 else 3"</span>, <span class="s">"&lt;string&gt;"</span>, <span class="s">"exec"</span>)
+<span class="f">print</span>(code_obj.co_code)      <span class="c"># raw bytes -- the actual bytecode</span>
+<span class="f">print</span>(code_obj.co_consts)    <span class="c"># (1, 2, 3, None) -- literal pool</span>
+<span class="f">print</span>(code_obj.co_names)     <span class="c"># ('y',) -- global/attr names used</span></pre>
+        </div>
+        <p>The compiler's output is a <code>code</code> object — a first-class Python object holding the bytecode itself plus every piece of metadata the VM needs to run it: constants, variable names, the number of local variables, argument info, and more.</p>
+
+        <h3 id="ch2-pvm">The PVM (Python Virtual Machine)</h3>
+        <p>The <strong>PVM</strong> (also called the "eval loop," after its C implementation function <code>_PyEval_EvalFrameDefault</code>) is the last stage: a big loop, written in C, that reads bytecode instructions one at a time and carries out whatever each one says — push a value, call a function, compare two objects, jump to another instruction. It is a <em class="term">stack machine</em> (detailed fully in Chapter 3): almost every instruction pushes to or pops from a per-frame value stack rather than referring to named registers.</p>
+        <p>This is the layer that is actually "interpreting" in the traditional sense — it's a software loop simulating a CPU, rather than your source running as native instructions on real silicon.</p>
+
+        <h3 id="ch2-pycache">__pycache__ and .pyc files</h3>
+        <p>Compiling source to bytecode has a real, measurable cost, and the bytecode for a given source file doesn't change unless the source does. So CPython caches it: the first time a module is imported, CPython writes the compiled bytecode to a <code>.pyc</code> file inside a <code>__pycache__</code> directory next to the source. On subsequent runs, if the source file's modification time and size (or content hash, depending on invalidation mode) haven't changed, CPython <strong>skips lexing, parsing, and compiling entirely</strong> and loads the cached bytecode directly.</p>
+        <div class="code-block">
+          <div class="code-head"><span>shell</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c">$</span> python3 -c <span class="s">"import mymodule"</span>
+<span class="c">$</span> ls __pycache__/
+mymodule.cpython-312.pyc</pre>
+        </div>
+        <ul>
+          <li>The filename encodes the interpreter version (<code>cpython-312</code>) because bytecode is <strong>not stable across Python versions</strong> — opcodes are added, removed, and renumbered between releases.</li>
+          <li>This caching applies to <strong>imported modules</strong>, not to the script you run directly with <code>python app.py</code> — the entry-point script is recompiled every run (though everything it imports still benefits from the cache).</li>
+          <li>A <code>.pyc</code> file has a small header (magic number, source hash/timestamp, flags) followed by the marshalled <code>code</code> object — essentially a serialized form of exactly what <code>compile()</code> produces in memory.</li>
+          <li>Deleting <code>__pycache__</code> is always safe — it's purely a performance cache. CPython regenerates it transparently.</li>
+        </ul>
+
+        <div class="exercise">
+          <b class="label">Try this</b>
+          <ol>
+            <li>Write a small module, import it once, and inspect the generated <code>__pycache__/*.pyc</code> file's timestamp.</li>
+            <li>Change one comment in the source (no logic change) and re-import — does the <code>.pyc</code> regenerate? (It does — mtime-based invalidation doesn't inspect content, only the timestamp, by default.)</li>
+            <li>Run <code>python -X importtime app.py</code> to see how much wall-clock time is spent per module import, including compilation.</li>
+          </ol>
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 2 — Key takeaways</div>
+          <ul>
+            <li>The pipeline is: <strong>source → tokens → CST → AST → bytecode → PVM execution</strong>, and it's a genuine multi-stage compiler front end feeding a bytecode interpreter back end.</li>
+            <li>The AST is the real "meaning" of your program as far as the compiler is concerned; tools that analyze Python code almost always work on this tree, not on text.</li>
+            <li>Bytecode is cached in <code>__pycache__/*.pyc</code> per interpreter version so imported modules skip recompilation when unchanged.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch3">
+        <div class="chapter-kicker"><span class="num">CH. 03</span><span class="tag">The Machine</span></div>
+        <h2 class="chapter-title">Bytecode &amp; The Virtual Machine</h2>
+        <p>Chapter 2 showed <em>where</em> bytecode comes from. This chapter opens it up: what an instruction actually looks like, how the VM executes it, and why CPython's execution model is described as a <em class="term">stack machine</em>.</p>
+
+        <h3 id="ch3-bytecode">Bytecode &amp; instructions</h3>
+        <p>Bytecode is a sequence of fixed-format instructions, each consisting of an <strong>opcode</strong> (what to do) and, for many instructions, an <strong>argument</strong> (data the opcode needs — an index into a table, a jump target, a count). Since Python 3.6, every instruction is encoded as exactly <strong>2 bytes</strong> ("wordcode"): 1 byte opcode + 1 byte argument (instructions needing bigger arguments use <code>EXTENDED_ARG</code> prefix instructions to widen it).</p>
+        <p>Crucially, bytecode is <strong>not portable across machines</strong> in the way "portable" is usually meant for source code — it's portable across <em>operating systems</em> for the <em>same CPython version</em>, but not across CPython versions, and it is meaningless to any other virtual machine. It exists purely as CPython's own internal instruction set.</p>
+
+        <h3 id="ch3-opcodes">Opcodes &amp; the instruction pointer</h3>
+        <p>Each opcode is a small integer with a symbolic name. A sample of common ones:</p>
+        <table>
+          <tr><th>Opcode</th><th>Meaning</th></tr>
+          <tr><td><code>LOAD_FAST</code></td><td>Push a local variable's value onto the stack</td></tr>
+          <tr><td><code>LOAD_GLOBAL</code></td><td>Push a global (or builtin) value onto the stack</td></tr>
+          <tr><td><code>LOAD_CONST</code></td><td>Push a constant from <code>co_consts</code> onto the stack</td></tr>
+          <tr><td><code>STORE_FAST</code></td><td>Pop the top of stack and store it into a local variable</td></tr>
+          <tr><td><code>BINARY_OP</code></td><td>Pop two values, apply an operator (+, -, *, ...), push the result</td></tr>
+          <tr><td><code>COMPARE_OP</code></td><td>Pop two values, compare them, push a bool</td></tr>
+          <tr><td><code>CALL</code></td><td>Pop a callable and its arguments off the stack, call it, push the return value</td></tr>
+          <tr><td><code>POP_JUMP_IF_FALSE</code></td><td>Pop a value; if falsy, jump the instruction pointer to a target</td></tr>
+          <tr><td><code>RETURN_VALUE</code></td><td>Pop the top of stack and return it from the current frame</td></tr>
+        </table>
+        <p>The <strong>instruction pointer</strong> (sometimes called the program counter, <code>f_lasti</code> on a frame object) tracks which bytecode instruction executes next. Sequential instructions simply increment it; control flow (<code>if</code>, <code>for</code>, <code>while</code>, function calls) works by <em>setting</em> it to a different offset — exactly analogous to how a CPU's program counter works, just simulated in software instead of hardware.</p>
+
+        <h3 id="ch3-stackmachine">The stack machine model</h3>
+        <p>CPython's VM is a <strong>stack machine</strong>: instructions don't name their operands (like <code>ADD R1, R2</code> on a register machine) — they implicitly operate on whatever is currently on top of a <em>per-frame value stack</em>. This makes the instruction set small and simple, at some cost to raw speed compared to register-based VMs (which is part of why PyPy and other high-performance implementations use different execution strategies).</p>
+        <p>Trace <code>x = 1 + 2</code> instruction by instruction:</p>
+        <div class="frame-diagram">
+          <div class="frame-box"><div class="fb-title">after LOAD_CONST 1</div><div class="fb-row"><span class="name">stack[0]</span><span class="val">1</span></div></div>
+          <div class="frame-box"><div class="fb-title">after LOAD_CONST 2</div><div class="fb-row"><span class="name">stack[0]</span><span class="val">1</span></div><div class="fb-row"><span class="name">stack[1]</span><span class="val">2</span></div></div>
+          <div class="frame-box"><div class="fb-title">after BINARY_OP +</div><div class="fb-row"><span class="name">stack[0]</span><span class="val">3</span></div><div class="fb-row" style="opacity:.35"><span class="name">(popped 2)</span><span class="val">— —</span></div></div>
+          <div class="frame-box"><div class="fb-title">after STORE_FAST x</div><div class="fb-row" style="opacity:.5"><span class="name">stack</span><span class="val">(empty)</span></div><div class="fb-row"><span class="name">locals[x]</span><span class="val">3</span></div></div>
+        </div>
+        <p>Every value used in an expression briefly lives on this stack. Function calls push a <em>new</em> stack (as part of a new frame — see Chapter 5), so recursion doesn't corrupt the caller's in-progress computation.</p>
+
+        <h3 id="ch3-compvsinterp">Compiler vs interpreter — where's the line?</h3>
+        <p>It's worth being precise about terminology, since Chapter 1 already complicated the "Python is interpreted" claim:</p>
+        <div class="deflist">
+          <div class="item"><dt>Compiler</dt><dd>Translates one representation into another <em>without executing it</em>. CPython's compiler translates AST → bytecode. This happens once (or once per source change, thanks to <code>.pyc</code> caching).</dd></div>
+          <div class="item"><dt>Interpreter</dt><dd>Executes instructions directly, one at a time, rather than translating them to a lower-level form first. CPython's eval loop <em>interprets</em> bytecode — it doesn't translate it further, it directly carries out each instruction's effect using a giant C <code>switch</code> statement (conceptually) keyed on opcode.</dd></div>
+        </div>
+        <p>So CPython is accurately described as a <strong>bytecode compiler paired with a bytecode interpreter</strong> — both words are correct, they just describe different stages. This distinguishes it from:</p>
+        <ul>
+          <li><strong>Pure interpreters</strong> (rare in practice) that walk the AST directly with no intermediate instruction format at all.</li>
+          <li><strong>Ahead-of-time compilers</strong> (C, Rust, Go) that translate all the way down to native machine code before any execution happens, with no runtime interpretation step left.</li>
+          <li><strong>JIT compilers</strong> (PyPy, JavaScript's V8) that interpret at first, then detect "hot" code paths at runtime and compile <em>those specific paths</em> to native machine code on the fly, mixing both strategies.</li>
+        </ul>
+
+        <h3 id="ch3-dis">The dis module</h3>
+        <p>The standard library's <code>dis</code> module disassembles bytecode back into human-readable form — the single best tool for building real intuition about what your code costs:</p>
+        <div class="code-block">
+          <div class="code-head"><span>dis_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> dis
+
+<span class="k">def</span> <span class="f">add</span>(a, b):
+    <span class="k">return</span> a + b
+
+dis.dis(add)
+
+<span class="c"># 2   0 RESUME     0
+#
+# 3   2 LOAD_FAST  0 (a)
+#     4 LOAD_FAST  1 (b)
+#     6 BINARY_OP  0 (+)
+#    10 RETURN_VALUE</span></pre>
+        </div>
+        <p>Reading this: column 1 is the source line number, column 2 is the byte offset of each instruction, column 3 is the opcode name, and the parenthesized value resolves the raw argument (an index) back to something readable (a variable name, a constant). This is exactly the tool used in Chapter 2's compiler discussion, just applied to a live function object instead of a raw string.</p>
+        <div class="note insight">
+          <b class="label">Practical use</b>
+          <code>dis</code> is how experienced Python engineers answer "which of these two implementations is actually cheaper" without guessing — disassemble both and count instructions, especially <code>CALL</code>s and attribute lookups, which dominate real-world Python overhead far more than arithmetic does.
+        </div>
+
+        <h3 id="ch3-flow">Execution flow, end to end</h3>
+        <p>Putting Chapters 2 and 3 together, here is the complete picture for running <code>python app.py</code>:</p>
+        <ol>
+          <li>CPython's C <code>main()</code> starts up, initializes the runtime (builtins, <code>sys</code>, import machinery).</li>
+          <li>Your script's source is read and, if not already cached, <strong>lexed → parsed → compiled to a code object</strong> (Chapter 2).</li>
+          <li>A <strong>frame object</strong> is created for the module's top-level code, with its own value stack and local/global namespaces (Chapter 4, 5, 6).</li>
+          <li>The <strong>PVM eval loop</strong> begins reading instructions from that code object, one at a time, mutating the stack and namespaces as it goes.</li>
+          <li>Function calls create <em>new</em> frames (each with its own stack) and transfer control into them; <code>RETURN_VALUE</code> pops the frame and hands a result back to the caller's stack.</li>
+          <li>When the module-level code reaches its end (or an unhandled exception propagates all the way up), the process exits.</li>
+        </ol>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 3 — Key takeaways</div>
+          <ul>
+            <li>Bytecode instructions are opcode + argument pairs; the VM is a <strong>stack machine</strong> — operands live on an implicit per-frame stack rather than named registers.</li>
+            <li>CPython is precisely both a compiler (AST → bytecode) <em>and</em> an interpreter (bytecode → effects) — not a contradiction, just two different stages.</li>
+            <li><code>dis.dis()</code> is the tool for turning "I think this is slow" into "I can see exactly why this is slow."</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch4">
+        <div class="chapter-kicker"><span class="num">CH. 04</span><span class="tag">★ Core Model</span></div>
+        <h2 class="chapter-title">The Python Object Model</h2>
+        <p>This is the chapter that changes how you read Python code permanently. Nearly every "surprising" Python behavior you've ever hit — mutable default arguments, why <code>a = b</code> doesn't copy, why <code>is</code> and <code>==</code> disagree — is a direct, logical consequence of the model in this chapter. Get this right and the rest of Python stops feeling like a pile of special cases.</p>
+
+        <h3 id="ch4-everything">Everything is an object</h3>
+        <p>In CPython, <strong>every single value is an object</strong> — not just instances of classes you define, but integers, strings, functions, classes themselves, modules, and even types. There is no category of "primitive" value that lives outside the object system, unlike Java (which has <code>int</code>, <code>double</code>, etc. as non-object primitives) or C.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="c">&gt;&gt;&gt;</span> <span class="f">type</span>(5)
+&lt;class <span class="s">'int'</span>&gt;
+<span class="c">&gt;&gt;&gt;</span> <span class="f">type</span>(<span class="f">print</span>)
+&lt;class <span class="s">'builtin_function_or_method'</span>&gt;
+<span class="c">&gt;&gt;&gt;</span> <span class="f">type</span>(<span class="k">int</span>)
+&lt;class <span class="s">'type'</span>&gt;
+<span class="c">&gt;&gt;&gt;</span> <span class="f">type</span>(<span class="k">type</span>)
+&lt;class <span class="s">'type'</span>&gt;   <span class="c"># type is its own type -- the root of the model</span>
+<span class="c">&gt;&gt;&gt;</span> (<span class="n">5</span>).bit_length()   <span class="c"># even int literals have methods, because they're objects</span>
+3</pre>
+        </div>
+        <p>Concretely, at the C level, every object is a block of memory that begins with a fixed header — at minimum a <strong>reference count</strong> and a <strong>pointer to a type object</strong> (the <code>PyObject</code> struct: <code>ob_refcnt</code> + <code>ob_type</code>). Everything else — an int's digits, a list's internal array, a function's bytecode — is additional data appended after that shared header. This uniform header is precisely what makes the reference counting in Chapter 5 possible: the memory manager only ever needs to understand one struct shape to track the lifetime of <em>any</em> Python value.</p>
+
+        <h3 id="ch4-identity">Identity, type, and value</h3>
+        <p>Every object has exactly three defining properties, and Python exposes a way to inspect each one:</p>
+        <div class="deflist">
+          <div class="item"><dt>Identity</dt><dd>A unique identifier for the object's lifetime, guaranteed stable and unique among simultaneously-alive objects. Exposed via <code>id(obj)</code> — in CPython, this happens to be the object's memory address, though that's an implementation detail, not a language guarantee.</dd></div>
+          <div class="item"><dt>Type</dt><dd>Determines what operations the object supports and how it behaves. Exposed via <code>type(obj)</code>. An object's type is set at creation and (with rare, deliberately obscure exceptions) never changes.</dd></div>
+          <div class="item"><dt>Value</dt><dd>The actual data the object represents. Whether the value <em>can</em> change after creation is exactly the mutable/immutable distinction.</dd></div>
+        </div>
+        <p>This gives you two different ways to compare objects, and confusing them is one of the most common real-world Python bugs:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">a</span> = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+<span class="k">b</span> = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+<span class="k">c</span> = a
+
+a == b   <span class="c"># True  -- same VALUE (list.__eq__ compares contents)</span>
+a is b   <span class="c"># False -- different IDENTITY (two distinct list objects)</span>
+a is c   <span class="c"># True  -- same IDENTITY (c is another name for a's object)</span></pre>
+        </div>
+        <p><code>==</code> asks "is the value equal" (and is customizable per-type via <code>__eq__</code>); <code>is</code> asks "is this the literal same object in memory" and can never be overridden. The rule of thumb: use <code>is</code> only for identity-meaningful singletons — <code>None</code>, <code>True</code>, <code>False</code>, and sentinel objects — never for general value comparison.</p>
+
+        <div class="note warn">
+          <b class="label">Gotcha: small int / short string caching</b>
+          CPython pre-creates and caches small integers (<strong>-5 to 256</strong>) and some string literals (via <em>interning</em>), so <code>a = 5; b = 5; a is b</code> can return <code>True</code> — not because Python promises this, but because both names happen to point at the same cached object. This is a CPython implementation detail, not a language guarantee, and relying on it is a classic beginner trap.
+        </div>
+
+        <h3 id="ch4-names">Names, bindings &amp; references</h3>
+        <p>Here is the reframing that unlocks the rest of the chapter: in Python, a <strong>name is not a box that holds a value</strong> — it is a <strong>label</strong> in a namespace (Chapter 6) that <em>points at</em> an object living independently on the heap. This is sometimes called <strong>"names and bindings"</strong> or a <strong>"reference model,"</strong> in contrast to a "value model" like C, where a variable <em>is</em> a fixed chunk of memory that directly stores a value.</p>
+        <div class="frame-diagram">
+          <div class="frame-box"><div class="fb-title">namespace (labels)</div><div class="fb-row"><span class="name">x</span><span class="val">→ ●</span></div><div class="fb-row"><span class="name">y</span><span class="val">→ ●</span></div></div>
+          <div class="frame-box"><div class="fb-title">heap (objects)</div><div class="fb-row"><span class="name">● int</span><span class="val">value=3</span></div><div class="fb-row"><span class="name">● list</span><span class="val">[1,2,3]</span></div></div>
+        </div>
+        <p>The act of <code>x = 3</code> creates (or reuses) an <code>int</code> object with value 3 somewhere on the heap, and makes the name <code>x</code> in the current namespace point to it. Nothing about the number 3 is "inside" the variable <code>x</code> the way it would be inside a C variable — <code>x</code> is just a pointer with a name attached, stored in a dictionary-like namespace.</p>
+        <p>This is exactly why function arguments in Python behave the way they do — often described as <strong>"pass by object reference"</strong> (or "call by sharing"), distinct from both "pass by value" and "pass by reference" as those terms are used in C++/Java:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">mutate</span>(lst):
+    lst.append(<span class="n">4</span>)      <span class="c"># mutates the SAME object the caller's name points to</span>
+
+<span class="k">def</span> <span class="f">rebind</span>(lst):
+    lst = [<span class="n">9</span>, <span class="n">9</span>, <span class="n">9</span>]  <span class="c"># rebinds the LOCAL name only -- caller unaffected</span>
+
+nums = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+mutate(nums)
+<span class="f">print</span>(nums)     <span class="c"># [1, 2, 3, 4]  -- caller sees the mutation</span>
+
+rebind(nums)
+<span class="f">print</span>(nums)     <span class="c"># [1, 2, 3, 4]  -- unchanged; rebind only pointed a LOCAL name elsewhere</span></pre>
+        </div>
+        <p>Both <code>lst</code> parameters are bound to the <em>same object</em> the caller's <code>nums</code> is bound to when the function is called — so mutating that object through any name affects everyone pointing at it. But <em>rebinding</em> a name (with <code>=</code>) only ever changes what that one local name points to; it can never reach back and change what the caller's name points to.</p>
+
+        <h3 id="ch4-novars">Why Python technically doesn't have "variables"</h3>
+        <p>The word "variable" implies a fixed storage location whose <em>contents vary</em>. That's an accurate mental model for C, where <code>int x;</code> reserves a specific 4/8-byte slot and assignment overwrites the bytes in that slot. It is <strong>not</strong> an accurate model for Python.</p>
+        <p>The official Python documentation and language reference deliberately avoid the word "variable" in favor of <strong>"name"</strong> bound in a <strong>namespace</strong> to an object. This isn't pedantry — the distinction predicts real behavior:</p>
+        <table>
+          <tr><th></th><th>C-style "variable"</th><th>Python "name"</th></tr>
+          <tr><td>What it is</td><td>A labeled memory slot with a fixed type and size</td><td>An entry in a namespace dict, pointing to an object</td></tr>
+          <tr><td>Assignment</td><td>Overwrites the bytes at that memory location</td><td>Repoints the label at a (possibly brand-new) object; old object is untouched</td></tr>
+          <tr><td>Type</td><td>Belongs to the variable, fixed at declaration</td><td>Belongs to the <em>object</em>, not the name — the same name can point to an int, then a string</td></tr>
+          <tr><td>Two names, one value</td><td>Requires an explicit pointer/reference</td><td>The default — any two names can point at the same object with plain <code>=</code></td></tr>
+        </table>
+        <p>This is also why Python is described as <strong>dynamically typed</strong>: <code>x = 5; x = "hello"</code> is completely legal, because typing is a property of the object <code>x</code> currently points to, not of <code>x</code> itself. The name has no type of its own — it is just a label that can be moved to point at any object at any time.</p>
+
+        <h3 id="ch4-assignment">Assignment &amp; multiple references</h3>
+        <p><code>=</code> in Python is always a <strong>binding operation</strong>, never a copy operation. This holds regardless of what's on the right-hand side:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>a = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+b = a                <span class="c"># b now points at the SAME list object as a -- no copy made</span>
+b.append(<span class="n">4</span>)
+<span class="f">print</span>(a)             <span class="c"># [1, 2, 3, 4] -- a "sees" it too, because there was only ever one list</span>
+
+<span class="f">print</span>(<span class="f">id</span>(a) == <span class="f">id</span>(b))   <span class="c"># True -- confirms same object</span></pre>
+        </div>
+        <p>To get an actual independent copy, you must ask for one explicitly — again, "explicit is better than implicit" from the Zen:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> copy
+
+shallow = a.copy()          <span class="c"># or list(a), or a[:]  -- new outer list, same inner objects</span>
+deep    = copy.deepcopy(a)  <span class="c"># new outer list AND recursively new inner objects</span></pre>
+        </div>
+        <p>Multiple references to one object are the normal, cheap, default case in Python — this is precisely what makes reference counting (Chapter 5) the right memory strategy: the runtime needs to know exactly how many names/containers are pointing at each object, because that's what determines when it's safe to free.</p>
+
+        <h3 id="ch4-lifetime">Object lifetime</h3>
+        <p>An object's lifetime is bounded by two events: <strong>creation</strong> (when it's constructed — a literal is evaluated, a constructor is called, an operation produces a new result) and <strong>destruction</strong> (when nothing references it anymore, so CPython reclaims its memory). Chapter 5 covers destruction mechanics (reference counting, the cyclic garbage collector) in full detail — for now, the object-model-level point is:</p>
+        <ul>
+          <li>An object stays alive exactly as long as <strong>at least one reference</strong> to it exists — from a name, a container, another object's attribute, or an internal reference held by the interpreter itself (like a currently-executing frame's stack).</li>
+          <li>Rebinding a name, deleting it (<code>del x</code>), a container going out of scope, or a frame returning all <em>remove</em> a reference — they don't necessarily destroy the object, only if that was its <em>last</em> reference.</li>
+          <li>You never manually free a Python object the way you'd call <code>free()</code> in C — you only ever remove references to it, and the runtime decides when zero references means "safe to destroy."</li>
+        </ul>
+
+        <div class="qa">
+          <div class="q">If names aren't variables, why does everyone (including Python's own docs) still say "variable" casually?</div>
+          <div class="a">Because it's a harmless shorthand once you understand the underlying model — the danger is only in taking the C-style mental model literally when reasoning about mutation, aliasing, or default arguments. This document uses "name" when precision matters and "variable" as loose shorthand elsewhere, exactly like most experienced Python engineers do.</div>
+          <div class="q">Does this reference model make Python slower than a value model like C?</div>
+          <div class="a">There's real overhead — every "variable access" is a pointer dereference plus (for attribute/global lookups) a dictionary lookup, versus a direct memory read in C. This is one of several compounding reasons CPython is slower than compiled languages for equivalent raw computation, alongside dynamic typing and bytecode interpretation (Chapter 3).</div>
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 4 — Key takeaways</div>
+          <ul>
+            <li><strong>Everything is an object</strong> — a <code>PyObject</code> header (refcount + type pointer) plus type-specific data, uniformly, with no unboxed primitives.</li>
+            <li>A name is a <strong>label in a namespace</strong> pointing at an object — not a storage slot. Types belong to objects, not names.</li>
+            <li><code>=</code> always binds a name to an (existing or new) object; it never copies. Two names can cheaply share one object, which is why mutation through one name is visible through the other.</li>
+            <li><code>is</code> compares identity (same object); <code>==</code> compares value (customizable per type). They agree far less often than beginners assume.</li>
+            <li>Object lifetime = as long as at least one reference exists; how that's tracked and enforced is the subject of Chapter 5.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch5">
+        <div class="chapter-kicker"><span class="num">CH. 05</span><span class="tag">Lifecycle</span></div>
+        <h2 class="chapter-title">Memory Management</h2>
+        <p>Chapter 4 established that objects live independently on the heap and are reached through references. This chapter covers the machinery that actually tracks those references and decides when memory can be reclaimed — the mechanics behind "object lifetime."</p>
+
+        <h3 id="ch5-heapstack">Heap vs stack (two different stacks, don't confuse them)</h3>
+        <p>There are genuinely <strong>two different "stacks"</strong> relevant to a running Python program, and conflating them causes real confusion:</p>
+        <div class="deflist">
+          <div class="item"><dt>C call stack</dt><dd>The operating-system-level stack used by the CPython interpreter's own C function calls (e.g. <code>_PyEval_EvalFrameDefault</code> calling itself recursively for nested Python calls). This is what limits deep Python recursion — <code>sys.setrecursionlimit()</code> exists mainly to fail with a clean <code>RecursionError</code> before this C stack actually overflows and crashes the process.</dd></div>
+          <div class="item"><dt>Python value stack</dt><dd>The per-frame stack introduced in Chapter 3 — a data structure the bytecode interpreter pushes/pops operands onto while evaluating expressions. It lives inside a frame object, which itself lives on the heap.</dd></div>
+          <div class="item"><dt>The heap</dt><dd>Where essentially <strong>all Python objects actually live</strong> — ints, lists, strings, function objects, frame objects, everything from Chapter 4. There is no Python-level equivalent of C's automatic stack-allocated local variables; every object, no matter how small or short-lived, is a heap allocation from the object model's point of view.</dd></div>
+        </div>
+        <p>So when a Python function runs, a new <em>frame object</em> (heap-allocated) is created holding a new <em>value stack</em> (also effectively heap-backed), and this all happens underneath a C function call that itself uses the real, OS-level C stack. Three layers, easy to conflate, genuinely distinct.</p>
+
+        <h3 id="ch5-refcount">Reference counting</h3>
+        <p>CPython's primary memory management strategy is <strong>reference counting</strong>: every object's header (Chapter 4) stores an integer, <code>ob_refcnt</code>, counting how many references currently point to it. The count is incremented every time a new reference is created (a name binding, appending to a list, passing as an argument) and decremented every time a reference goes away (rebinding, <code>del</code>, a container being cleared, a frame returning).</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> sys
+
+x = []
+<span class="f">print</span>(sys.getrefcount(x))   <span class="c"># 2 -- one for 'x', one for the temporary arg to getrefcount() itself</span>
+
+y = x
+<span class="f">print</span>(sys.getrefcount(x))   <span class="c"># 3 -- 'x', 'y', and the temporary arg</span>
+
+<span class="k">del</span> y
+<span class="f">print</span>(sys.getrefcount(x))   <span class="c"># back to 2</span></pre>
+        </div>
+        <p>When the count reaches <strong>zero</strong>, CPython knows — deterministically, immediately, with no scanning or delay — that nothing can reach the object anymore, and frees it right there. This is why Python's memory cleanup is largely <strong>deterministic</strong>: unlike a tracing-only garbage collector (as in Java or Go), you can often predict the exact moment an object's <code>__del__</code> runs, because it's tied to the precise statement that drops the last reference, not to an unpredictable GC cycle.</p>
+        <div class="note insight">
+          <b class="label">Why this is also why the GIL exists</b>
+          Incrementing/decrementing a plain integer isn't safe if two threads could do it simultaneously — you'd get lost updates and either premature frees or memory leaks. CPython's <strong>Global Interpreter Lock</strong> exists largely to guarantee only one thread executes bytecode (and therefore touches refcounts) at a time, sidestepping the need for expensive atomic operations on every single reference count change, everywhere, throughout the interpreter.
+        </div>
+
+        <h3 id="ch5-gc">The garbage collector (cyclic GC)</h3>
+        <p>Reference counting has exactly one structural blind spot: <strong>reference cycles</strong>. If object A references object B, and B references A, their counts never reach zero through normal dereferencing — even if nothing outside the cycle can reach either of them anymore.</p>
+        <p>CPython solves this with a secondary, <strong>generational, tracing garbage collector</strong> (the <code>gc</code> module) that runs periodically alongside reference counting, specifically to find and collect these unreachable cycles. It only needs to track objects that are <em>capable</em> of participating in a cycle — meaning "container" types that can hold references to other objects (lists, dicts, class instances, etc.); plain immutable scalars like ints and strings are exempt because they can never point back at anything.</p>
+        <ul>
+          <li>It organizes tracked objects into <strong>three generations</strong> (0, 1, 2) based on survival — new objects start in generation 0; if a collection pass doesn't free them, they get promoted, on the empirical assumption ("generational hypothesis") that most objects die young, so scanning young objects frequently and old objects rarely is an efficient trade-off.</li>
+          <li>Collection is triggered automatically based on allocation/deallocation thresholds, and can also be run manually with <code>gc.collect()</code>.</li>
+          <li>It can be disabled entirely with <code>gc.disable()</code> — sometimes done deliberately in latency-sensitive short-lived processes, relying purely on reference counting plus process exit to reclaim memory.</li>
+        </ul>
+
+        <h3 id="ch5-cycles">Cyclic references, in practice</h3>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">class</span> <span class="f">Node</span>:
+    <span class="k">def</span> <span class="f">__init__</span>(self):
+        self.other = <span class="k">None</span>
+
+a = Node()
+b = Node()
+a.other = b     <span class="c"># a references b</span>
+b.other = a     <span class="c"># b references a -- a cycle</span>
+
+<span class="k">del</span> a
+<span class="k">del</span> b
+<span class="c"># Neither refcount ever hit zero -- each still holds one reference
+# from the other. They are unreachable from anywhere else in the
+# program, but pure refcounting alone will never free them.
+# The generational cyclic GC is what eventually finds and frees this pair.</span></pre>
+        </div>
+        <p>The most common real-world source of accidental cycles is a parent object holding a reference to a child, and that child holding a "back-reference" to its parent (common in tree/graph structures, GUI widget hierarchies, and ORMs) — almost always intentional and harmless, because the cyclic GC handles it, just with a small delay compared to pure refcounting.</p>
+
+        <h3 id="ch5-id">id() and del, precisely</h3>
+        <p><code>id(obj)</code> returns an object's identity — in CPython specifically, its memory address, though the language only guarantees it's a stable, unique-among-simultaneously-alive-objects integer for the object's lifetime; treating it as a memory address is a CPython-specific detail.</p>
+        <p><code>del name</code> is frequently misunderstood as "delete the object." It does not — <strong><code>del</code> removes a name from its namespace</strong>, which <em>decrements</em> the refcount of whatever object that name pointed to. The object is only actually destroyed if that was its last reference.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>a = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>]
+b = a
+<span class="k">del</span> a         <span class="c"># removes the NAME 'a'; the list itself is untouched -- b still holds it</span>
+<span class="f">print</span>(b)     <span class="c"># [1, 2, 3] -- still fully alive</span></pre>
+        </div>
+
+        <h3 id="ch5-weakref">Weak references</h3>
+        <p>A normal reference keeps its target alive. A <strong>weak reference</strong> (<code>weakref</code> module) lets you refer to an object <em>without</em> increasing its refcount — meaning the object can still be garbage collected as if the weak reference didn't exist. This is the tool of choice for caches, observer patterns, and any parent↔child relationship where you want to avoid manufacturing an artificial reference cycle in the first place.</p>
+        <div class="code-block">
+          <div class="code-head"><span>weakref_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> weakref
+
+<span class="k">class</span> <span class="f">Cache</span>: <span class="k">pass</span>
+
+obj = Cache()
+ref = weakref.ref(obj)    <span class="c"># does NOT bump obj's refcount</span>
+
+<span class="f">print</span>(ref())            <span class="c"># &lt;Cache object&gt; -- call it to get the real object (or None if dead)</span>
+
+<span class="k">del</span> obj
+<span class="f">print</span>(ref())            <span class="c"># None -- the object was freed; the weak ref doesn't keep it alive</span></pre>
+        </div>
+        <p><code>weakref.WeakValueDictionary</code> and <code>WeakKeyDictionary</code> build on this to make entire caches whose entries disappear automatically the moment nothing else references them — no manual eviction logic required.</p>
+
+        <div class="exercise">
+          <b class="label">Try this</b>
+          <ol>
+            <li>Create a deliberate reference cycle, call <code>gc.disable()</code> first, and watch <code>gc.collect()</code> report the count of unreachable objects it finds when you re-enable and run it manually.</li>
+            <li>Implement <code>__del__</code> on a class and observe exactly when it fires relative to <code>del</code> statements, function returns, and reassignment — this builds real intuition for refcount-driven lifetime.</li>
+            <li>Use <code>tracemalloc</code> to snapshot memory before/after a loop that (accidentally) keeps appending to a module-level list, and see the leak show up concretely.</li>
+          </ol>
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 5 — Key takeaways</div>
+          <ul>
+            <li>Three distinct "stacks/spaces" exist: the OS-level <strong>C call stack</strong>, the per-frame <strong>Python value stack</strong>, and the <strong>heap</strong> where all objects actually live.</li>
+            <li><strong>Reference counting</strong> is the primary, deterministic memory strategy — an object is freed the instant its refcount hits zero.</li>
+            <li>The <strong>cyclic GC</strong> is a secondary, periodic, generational collector that exists solely to catch reference cycles, which refcounting alone can never resolve.</li>
+            <li><code>del</code> removes a name binding, not an object — destruction only follows if that was the object's last reference.</li>
+            <li><strong>Weak references</strong> let you observe an object without keeping it alive — the standard tool for caches and back-references.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch6">
+        <div class="chapter-kicker"><span class="num">CH. 06</span><span class="tag">Lookup Rules</span></div>
+        <h2 class="chapter-title">Namespaces &amp; Scope</h2>
+        <p>Chapter 4 established that a name is a label in a <em class="term">namespace</em>. This chapter answers the natural follow-up: when your code says <code>x</code>, <em>which</em> namespace does Python actually search — and in what order?</p>
+
+        <h3 id="ch6-legb">The LEGB rule</h3>
+        <p>Every name lookup in Python is resolved by searching, in this exact order, until a match is found: <strong>L</strong>ocal → <strong>E</strong>nclosing → <strong>G</strong>lobal → <strong>B</strong>uiltin. If none of the four contain the name, Python raises <code>NameError</code>.</p>
+        <div class="deflist">
+          <div class="item"><dt>Local (L)</dt><dd>Names assigned <em>anywhere</em> inside the current function — including ones that haven't executed yet — belong to that function's local namespace. This is determined <strong>statically</strong> by the compiler scanning the function body at compile time, not dynamically as the function runs.</dd></div>
+          <div class="item"><dt>Enclosing (E)</dt><dd>The local namespace of any <em>enclosing</em> function, for nested functions — this is what makes closures possible. Skipped entirely for top-level functions with no enclosing function.</dd></div>
+          <div class="item"><dt>Global (G)</dt><dd>The module-level namespace — every name assigned at the top level of a <code>.py</code> file, outside any function or class body.</dd></div>
+          <div class="item"><dt>Builtin (B)</dt><dd>Names Python provides automatically to every module — <code>print</code>, <code>len</code>, <code>range</code>, <code>Exception</code>, and dozens more — living in the <code>builtins</code> module, checked only after all three narrower scopes miss.</dd></div>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>legb_demo.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>x = <span class="s">"global"</span>        <span class="c"># Global scope</span>
+
+<span class="k">def</span> <span class="f">outer</span>():
+    x = <span class="s">"enclosing"</span>    <span class="c"># Enclosing scope (relative to inner())</span>
+
+    <span class="k">def</span> <span class="f">inner</span>():
+        x = <span class="s">"local"</span>    <span class="c"># Local scope</span>
+        <span class="f">print</span>(x)        <span class="c"># "local"     -- found at L, search stops immediately</span>
+
+    inner()
+    <span class="f">print</span>(x)          <span class="c"># "enclosing" -- outer()'s own local x</span>
+
+outer()
+<span class="f">print</span>(x)              <span class="c"># "global"    -- module-level x, untouched by either function</span>
+<span class="f">print</span>(<span class="f">len</span>)             <span class="c"># &lt;built-in function len&gt; -- found only at B, since 'len' is never assigned above</span></pre>
+        </div>
+        <p>The critical, often-surprising rule: <strong>if a name is assigned anywhere in a function body, Python treats it as local for the <em>entire</em> function</strong> — even on lines that execute before the assignment. This is a compile-time decision, not a runtime one, and it produces a classic bug:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>count = <span class="n">0</span>
+
+<span class="k">def</span> <span class="f">increment</span>():
+    <span class="f">print</span>(count)    <span class="c"># UnboundLocalError, NOT 0!</span>
+    count = count + <span class="n">1</span>  <span class="c"># this assignment makes 'count' local for the WHOLE function</span>
+    <span class="c"># Python sees the assignment on line 2 at compile time, decides 'count'
+    # is local everywhere in this function -- so the print() above tries to
+    # read a local 'count' that hasn't been assigned yet, and fails.</span></pre>
+        </div>
+
+        <h3 id="ch6-global">The <code>global</code> keyword</h3>
+        <p>Per the Zen's "explicit is better than implicit," Python <strong>never</strong> lets a plain assignment inside a function silently rebind a global name — it always creates a new local instead (as just demonstrated). To deliberately rebind a module-level name from inside a function, you must declare intent explicitly with <code>global</code>:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>count = <span class="n">0</span>
+
+<span class="k">def</span> <span class="f">increment</span>():
+    <span class="k">global</span> count     <span class="c"># explicit: 'count' here means the module-level name</span>
+    count = count + <span class="n">1</span>
+
+increment()
+<span class="f">print</span>(count)          <span class="c"># 1 -- the module-level name was actually rebound</span></pre>
+        </div>
+        <p>Note: <code>global</code> is only needed for <strong>assignment</strong>. Merely <em>reading</em> a global name (with no assignment anywhere in the function) works fine without it — LEGB finds it at the G step naturally. <code>global</code> is also unnecessary for <em>mutating</em> a global object in place (e.g. <code>some_global_list.append(x)</code>) — that's a method call on an object you already have a reference to via lookup, not a rebinding of the name itself.</p>
+
+        <h3 id="ch6-nonlocal">The <code>nonlocal</code> keyword</h3>
+        <p><code>nonlocal</code> solves the identical problem one level up: rebinding a name that lives in an <strong>enclosing function's</strong> scope (not global, not local) — most commonly needed inside closures:</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">def</span> <span class="f">make_counter</span>():
+    count = <span class="n">0</span>
+    <span class="k">def</span> <span class="f">increment</span>():
+        <span class="k">nonlocal</span> count   <span class="c"># explicit: this 'count' means make_counter's local, not a new local</span>
+        count += <span class="n">1</span>
+        <span class="k">return</span> count
+    <span class="k">return</span> increment
+
+counter = make_counter()
+<span class="f">print</span>(counter())   <span class="c"># 1</span>
+<span class="f">print</span>(counter())   <span class="c"># 2 -- state persists across calls, held alive by the closure</span></pre>
+        </div>
+        <p>Without <code>nonlocal</code>, <code>count += 1</code> inside <code>increment()</code> would raise <code>UnboundLocalError</code> for exactly the same reason as the global example — the assignment makes <code>count</code> local to <code>increment()</code>, shadowing the enclosing one, before the read on the right-hand side of <code>+=</code> can even happen. <code>nonlocal</code> can reach through any number of nested enclosing functions, but — unlike <code>global</code> — it <strong>cannot</strong> reach all the way to module (global) scope; it's specifically for enclosing <em>function</em> scopes.</p>
+
+        <h3 id="ch6-namespaces">Module &amp; function namespaces, concretely</h3>
+        <p>Namespaces aren't an abstract concept — they are, quite literally, <strong>dictionaries</strong> mapping name strings to objects, and Python exposes them directly:</p>
+        <table>
+          <tr><th>Function</th><th>Returns</th></tr>
+          <tr><td><code>globals()</code></td><td>The current module's namespace dict — same object as <code>module.__dict__</code></td></tr>
+          <tr><td><code>locals()</code></td><td>The current local namespace as a dict (a live view at module/class scope; a <em>snapshot copy</em> inside a function, for CPython implementation reasons)</td></tr>
+          <tr><td><code>vars(obj)</code></td><td>An object's own <code>__dict__</code>, if it has one — instances, modules, classes</td></tr>
+          <tr><td><code>dir(obj)</code></td><td>A sorted list of names reachable from <code>obj</code>, including inherited ones — a readability helper, not the raw namespace itself</td></tr>
+        </table>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre>x = <span class="n">42</span>
+<span class="f">print</span>(<span class="s">"x"</span> <span class="k">in</span> globals())   <span class="c"># True -- module namespace really is just a dict</span>
+<span class="f">print</span>(globals()[<span class="s">"x"</span>])       <span class="c"># 42 -- can even read a name by string key, bypassing normal syntax</span></pre>
+        </div>
+        <p>This is precisely why <strong>Chapter 4's "namespaces are one honking great idea"</strong> quote and <strong>Chapter 7's import system</strong> connect so tightly: a module object, at its core, is barely more than a namespace dict with a name attached — <code>import</code> is largely about creating one of these and making it reachable, which is exactly where the next chapter picks up.</p>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 6 — Key takeaways</div>
+          <ul>
+            <li><strong>LEGB</strong> — Local, Enclosing, Global, Builtin — is the fixed search order for every name lookup, resolved statically by the compiler for the Local/Enclosing layers.</li>
+            <li>Any assignment anywhere in a function body makes that name local for the <em>entire</em> function, which is the root cause of most <code>UnboundLocalError</code>s.</li>
+            <li><code>global</code> and <code>nonlocal</code> exist purely to make <strong>rebinding</strong> an outer name an explicit, deliberate act — reading and in-place mutation never need them.</li>
+            <li>Namespaces are literally dictionaries — <code>globals()</code>, <code>locals()</code>, and <code>__dict__</code> expose them directly, and this is the same machinery the import system builds on.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="chapter" id="ch7">
+        <div class="chapter-kicker"><span class="num">CH. 07</span><span class="tag">Modularity</span></div>
+        <h2 class="chapter-title">The Import System</h2>
+        <p>The final piece of the runtime picture: how <code>import</code> actually works, why it's safe to import the same module from ten different files without ten times the cost, and why circular imports break in the specific way they do — all direct consequences of Chapters 2 and 6.</p>
+
+        <h3 id="ch7-modules">Modules &amp; packages</h3>
+        <div class="deflist">
+          <div class="item"><dt>Module</dt><dd>The unit of code reuse — in the simplest case, just one <code>.py</code> file. When imported, Python executes the file top to bottom <strong>exactly once</strong> and wraps the resulting namespace (Chapter 6) in a <code>module</code> object.</dd></div>
+          <div class="item"><dt>Package</dt><dd>A directory containing modules (and/or sub-packages), used to organize larger codebases hierarchically. A package is really just a module whose namespace happens to be built from a directory instead of a single file.</dd></div>
+        </div>
+        <p><code>import mypkg.mymodule</code> works because Python's import machinery translates dotted names into a filesystem/package search: it looks for a <code>mypkg</code> package, then a <code>mymodule</code> inside it, following the mechanisms below.</p>
+
+        <h3 id="ch7-init">__init__.py</h3>
+        <p><code>__init__.py</code> is the file that (historically) <strong>marks a directory as a package</strong> and runs automatically the first time that package (or anything inside it) is imported. Its responsibilities, in practice:</p>
+        <ul>
+          <li>Runs package-level setup code — the same way a module's top level runs on first import.</li>
+          <li>Controls what a plain <code>from mypkg import *</code> exposes, via an explicit <code>__all__</code> list.</li>
+          <li>Commonly re-exports selected names from submodules, so users can write <code>from mypkg import Thing</code> instead of <code>from mypkg.submodule import Thing</code> — a deliberate public-API decision, not an accident.</li>
+        </ul>
+        <div class="note">
+          <b class="label">Modern nuance</b>
+          Since <strong>PEP 420</strong> (Python 3.3+), a directory <em>without</em> an <code>__init__.py</code> can still function as a <strong>namespace package</strong> — useful for splitting one logical package across multiple distributed directories. A directory <em>with</em> <code>__init__.py</code> is called a <strong>regular package</strong> and remains the overwhelmingly common, more explicit choice for ordinary projects.
+        </div>
+
+        <h3 id="ch7-caching">Import caching &amp; <code>sys.modules</code></h3>
+        <p>This is the single most important mechanical fact about imports: <strong><code>sys.modules</code> is a dictionary that caches every module that has ever been imported</strong>, keyed by its full dotted name. Every <code>import</code> statement, anywhere in your program, checks this cache <em>first</em>.</p>
+        <div class="code-block">
+          <div class="code-head"><span>python3</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> sys
+<span class="k">import</span> json
+
+<span class="s">"json"</span> <span class="k">in</span> sys.modules       <span class="c"># True -- it's cached now</span>
+sys.modules[<span class="s">"json"</span>] <span class="k">is</span> json   <span class="c"># True -- literally the same module object</span>
+
+<span class="k">import</span> json <span class="k">as</span> j2
+j2 <span class="k">is</span> json                  <span class="c"># True -- re-importing hands back the cached object, doesn't re-run the file</span></pre>
+        </div>
+        <p>This is what makes <code>import</code> cheap after the first time, and — more importantly — guarantees a critical correctness property: <strong>a module's top-level code runs exactly once per process</strong>, no matter how many files import it. Every importer receives a reference to the <em>same</em> module object, sharing the same namespace — module-level state (a cache dict, a singleton, a database connection pool) is genuinely shared across your whole codebase for free, because of this cache.</p>
+        <p>The actual algorithm, simplified, when you write <code>import foo</code>:</p>
+        <ol>
+          <li>Is <code>"foo"</code> already a key in <code>sys.modules</code>? If yes, bind the name <code>foo</code> to that cached object and stop — <strong>no file is re-read or re-executed.</strong></li>
+          <li>If not, search <code>sys.path</code> (a list of directories) for a matching module or package using the configured <strong>finders</strong> and <strong>loaders</strong> (the importlib machinery).</li>
+          <li>Once found, create a new, initially-empty module object and <strong>insert it into <code>sys.modules</code> immediately</strong> — before executing a single line of its code. This early insertion is precisely what makes circular imports partially work, and is the key to understanding the next section.</li>
+          <li>Execute the module's code top to bottom, populating its namespace as it goes.</li>
+          <li>Bind the name in the importing scope.</li>
+        </ol>
+
+        <h3 id="ch7-circular">Circular imports</h3>
+        <p>A <strong>circular import</strong> happens when module A imports module B, and module B (directly or transitively) imports module A back. Given step 3 above — the module is registered in <code>sys.modules</code> <em>before</em> it finishes executing — a circular import doesn't always crash, but it does mean the "back-importing" module can receive a <strong>partially initialized</strong> module object, one that's missing whatever names haven't been defined yet at that point in execution.</p>
+        <div class="code-block">
+          <div class="code-head"><span>a.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> b
+<span class="k">def</span> <span class="f">func_a</span>(): <span class="k">return</span> <span class="s">"a"</span></pre>
+        </div>
+        <div class="code-block">
+          <div class="code-head"><span>b.py</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <pre><span class="k">import</span> a
+<span class="f">print</span>(a.func_a())   <span class="c"># AttributeError!
+# When b.py runs (triggered from inside a.py's own "import b" line),
+# a's module object already exists in sys.modules -- but a.py hasn't
+# gotten past its own "import b" line yet, so func_a isn't defined
+# on it yet. b gets a real but incomplete version of module a.</span></pre>
+        </div>
+        <p>Common fixes, in order of general preference:</p>
+        <ul>
+          <li><strong>Restructure</strong> — move the shared functionality both modules need into a third module they both import from, avoiding the cycle entirely (usually the right long-term fix).</li>
+          <li><strong>Import inside the function</strong>, not at module top level — delays the import until the function is actually called, by which point both modules have finished their top-level execution.</li>
+          <li><strong>Import the module, not the name</strong> — <code>import a</code> then use <code>a.func_a()</code> at call time, rather than <code>from a import func_a</code> at the top, since the latter needs the name to exist <em>at import time</em>, while the former only needs the attribute to exist by the time you actually call it.</li>
+        </ul>
+
+        <h3 id="ch7-relabs">Relative vs absolute imports</h3>
+        <div class="deflist">
+          <div class="item"><dt>Absolute import</dt><dd><code>import mypkg.utils</code> or <code>from mypkg.utils import helper</code> — specifies the full dotted path from a top-level entry on <code>sys.path</code>. Unambiguous, doesn't depend on the importing file's own location, and is the style recommended by <strong>PEP 8</strong> for most cases.</dd></div>
+          <div class="item"><dt>Relative import</dt><dd><code>from . import sibling</code> or <code>from ..otherpkg import thing</code> — expressed relative to the <em>current module's own position</em> inside its package, using leading dots (one dot = current package, two dots = parent package, and so on). Only legal inside a package (a file that has a real <code>__package__</code>), never in a standalone top-level script.</dd></div>
+        </div>
+        <p>Relative imports are resolved using the module's <code>__name__</code>/<code>__package__</code> attributes, not the filesystem path directly — which is exactly why running a file inside a package <em>directly</em> as a script (<code>python mypkg/module.py</code>) often breaks its relative imports: run that way, Python sets <code>__name__ = "__main__"</code> and has no package context to resolve the dots against. Running it as <code>python -m mypkg.module</code> instead preserves the package context and fixes this.</p>
+
+        <div class="exercise">
+          <b class="label">Try this</b>
+          <ol>
+            <li>Add a <code>print("loading X")</code> at the top of a module, import it from three different files in the same run, and confirm the print only fires once — direct proof of the <code>sys.modules</code> cache.</li>
+            <li>Deliberately construct the two-file circular import example above and reproduce the <code>AttributeError</code>; then fix it using the "import the module, not the name" pattern.</li>
+            <li>Compare <code>python mypkg/mod.py</code> vs <code>python -m mypkg.mod</code> when <code>mod.py</code> contains a relative import, and observe the difference firsthand.</li>
+          </ol>
+        </div>
+
+        <div class="chapter-summary">
+          <div class="cs-title">Chapter 7 — Key takeaways</div>
+          <ul>
+            <li><strong><code>sys.modules</code></strong> caches every imported module by dotted name — a module's top-level code runs <strong>at most once</strong> per process, and every importer shares one namespace.</li>
+            <li>A module is registered in the cache <strong>before</strong> it finishes executing, which is both why some circular imports work at all and exactly why others fail with a partial-attribute error.</li>
+            <li><code>__init__.py</code> marks (and initializes) a regular package; namespace packages (no <code>__init__.py</code>) are a more specialized, PEP 420 alternative.</li>
+            <li>Prefer absolute imports; reach for relative imports deliberately within a package, and remember they depend on package <em>context</em>, not raw file location.</li>
+          </ul>
+        </div>
+      </section>
+
+
+
+      <div class="end-note">
+        END OF PART I · continue to Part II when ready
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<a href="#top" class="backtotop" id="backtotop">↑</a>
+
+<script>
+  // Mobile sidebar toggle
+  const sidebar = document.getElementById('sidebar');
+  const menuToggle = document.getElementById('menuToggle');
+  menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  document.querySelectorAll('.sidebar a').forEach(a => a.addEventListener('click', () => sidebar.classList.remove('open')));
+
+  // Back to top visibility
+  const backtotop = document.getElementById('backtotop');
+  window.addEventListener('scroll', () => {
+    backtotop.classList.toggle('show', window.scrollY > 600);
+  });
+
+  // Scroll-spy active link highlighting
+  const links = Array.from(document.querySelectorAll('nav.toc a'));
+  const targets = links.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const id = '#' + entry.target.id;
+      const link = links.find(a => a.getAttribute('href') === id);
+      if (!link) return;
+      if (entry.isIntersecting){
+        links.forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  targets.forEach(t => io.observe(t));
+</script>
+
+</body>
+</html>
